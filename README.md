@@ -1,10 +1,10 @@
 # Tokenizers for Go
 Tokenizers for Language Models - Go API for [HuggingFace Tokenizers](https://github.com/huggingface/tokenizers)
 
-## Hightlights (planned, all TODO now)
+## Highlights
 
 > [!IMPORTANT]  
-> TODO
+> TODO: nothing implemented yet.
 
 * Allow customization to various LLMs (like original HuggingFace library)
 * Provide a `from_pretrained` API, that downloads parameters to various known models -- levaraging HuggingFace Hub
