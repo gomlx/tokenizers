@@ -11,6 +11,7 @@ import (
 	"github.com/magefile/mage/target"
 	"github.com/pkg/errors"
 	"os"
+	"os/exec"
 	"path"
 	"strings"
 )
@@ -25,6 +26,12 @@ func must(err error) {
 	}
 }
 
+// must1 panics if an error is passed, otherwies returns t.
+func must1[T any](t T, err error) T {
+	must(err)
+	return t
+}
+
 var (
 	// Please fill out this mapping if adding support for a different platform.
 	// The Go platform name is created with `$GOOS/$GOARCH`, e.g. `linux/amd64`.
@@ -36,11 +43,15 @@ var (
 	}
 )
 
-const libraryName = "libgomlx_tokenizers.a"
+const (
+	libraryName = "libgomlx_tokenizers.a"
+	headerName  = "gomlx_tokenizer.h"
+)
 
 // Builds the Rust library `libgomlx_tokenizers.a` for the current platform.
 // It uses the `mapGoPlatformToFunction` to map the platform to the corresponding target function.
 func Build() error {
+	mg.Deps(Header)
 	return rustBuild(getGoPlatform())
 }
 
@@ -53,23 +64,54 @@ func Release() error {
 	// Trying to parallelize the building Rust code will probably be slower, since each one will already be parallelized
 	// by `cargo`.
 	//mg.SerialDeps(Linux_amd64, Darwin_arm64, Darwin_amd64)
-	mg.SerialDeps(Build)
+	mg.SerialDeps(Header, Build)
 	return nil
 }
 
 // Builds the Rust library `libgomlx_tokenizers.a` for linux/amd64 platform.
 func Linux_amd64() error {
+	mg.Deps(Header)
 	return rustBuild("linux/amd64")
 }
 
 // Builds the Rust library `libgomlx_tokenizers.a` for darwin/amd64 platform.
 func Darwin_amd64() error {
+	mg.Deps(Header)
 	return rustBuild("darwin/amd64")
 }
 
 // Builds the Rust library `libgomlx_tokenizers.a` for darwin/arm64 platform.
 func Darwin_arm64() error {
+	mg.Deps(Header)
 	return rustBuild("darwin/arm64")
+}
+
+// Header builds the `gomlx_tokenizer.h` header file from the Rust sources, using `cbindgen`.
+func Header() error {
+	// Check whether target is up-to-date.
+	pwd := must1(os.Getwd())
+	dst := path.Join(pwd, "internal", "rs", headerName)
+	modified, err := target.Glob(dst, "rs/Cargo.toml", "rs/src/*.rs")
+	if err != nil {
+		return err
+	}
+	if !modified {
+		return nil
+	}
+
+	// Make sure cbindgen is installed.
+	if _, err := exec.LookPath("cbindgen"); err != nil {
+		return errors.WithMessage(err,
+			"can't find `cbindgen`, a program that converts Rust signatures to C, needed for "+
+				"binding with Go -- it can usually be installed with `cargo install cbindgen`")
+	}
+
+	// Build header file.
+	must(os.Chdir("rs"))
+	fmt.Printf("Building header file %q\n", dst)
+	err = sh.Run("cbindgen", "--config", "cbindgen.toml", "--output", dst)
+	must(os.Chdir(".."))
+	return err
 }
 
 // rustBuild builds the rust library `libgomlx_tokenizers.a` for the corresponding Go platform.
