@@ -1,4 +1,4 @@
-package tokenizers_test
+package rs_test
 
 import (
 	_ "embed"

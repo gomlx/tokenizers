@@ -1,11 +1,16 @@
 //go:build go1.22
 
-package tokenizers
+// Only available starting in go-1.22
+
+package rs
 
 /*
 // This is a performance optimization.
 // The following noescape and nocallback directives are used to
 // prevent the Go compiler from allocating function parameters on the heap.
+//
+// See details in https://github.com/golang/go/issues/56378.
+//
 
 #cgo noescape from_bytes
 #cgo nocallback from_bytes

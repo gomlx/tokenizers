@@ -1,15 +1,24 @@
-package tokenizers
+// Package rs wraps the Rust tokenizer.
+//
+// The two parts used by this wrapper are:
+//
+//   - The linked Rust tokenizer is in [huggingface/tokenizers/tokenizers](https://github.com/huggingface/tokenizers/tree/main/tokenizers).
+//   - The Rust wrapper with a C signature (`extern "C"`) is implemented in the subdirectory
+//     [github.com/gomlx/tokenizers/rs](https://github.com/gomlx/tokenizers/tree/main/rs).
+//
+// End users should use the public library in [github.com/gomlx/tokenizers](https://github.com/gomlx/tokenizers) instead.
+package rs
 
 /*
-#cgo LDFLAGS: ${SRCDIR}/libtokenizers.a -ldl -lm -lstdc++
+#cgo LDFLAGS: ${SRCDIR}/libgomlx_tokenizers.a -ldl -lm -lstdc++
 #include <stdlib.h>
 #include "tokenizers.h"
 */
 import "C"
 
-// NOTE: There should be NO space between the comments and the `import "C"` line.
 import (
 	"io"
+	"runtime"
 	"unsafe"
 )
 
@@ -219,6 +228,7 @@ func (t *Tokenizer) EncodeBatch(strArr []string, addSpecialTokens bool, opts ...
 		(**C.char)(unsafe.Pointer(&cStrings[0])),
 		(*C.struct_EncodeOptions)(unsafe.Pointer(&encOptions)),
 	)
+	runtime.KeepAlive(encOptions)
 
 	// parse tokenizer encode result
 	batchResult := make([]*TokenizerResult, batchLen)
@@ -275,6 +285,7 @@ func (t *Tokenizer) Decode(tokenIDs []uint32, skipSpecialTokens bool) string {
 		return ""
 	}
 	res := C.decode(t.tokenizer, (*C.uint)(unsafe.Pointer(&tokenIDs[0])), C.uint(len(tokenIDs)), C.bool(skipSpecialTokens))
+	runtime.KeepAlive(tokenIDs)
 	defer C.free_string(res)
 
 	return C.GoString(res)
