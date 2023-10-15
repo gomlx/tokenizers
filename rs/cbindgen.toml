@@ -1,0 +1,11 @@
+# cbindgen generates the C-header file (`.h` file) for the Rust functions
+# exported with `extern "C"`, that we will use in Go.
+# It also exports the data types annotated with `#[repr(C)]`.
+#
+# The header file is platform independent (same for all platforms), and it is
+# included along the `libgomlx_tokenizers.tar.gz` artifact, since the version
+# of the `.h` file and the library `libgomlx_tokenizers.a` must match.
+
+language = "c"
+header = "/* File generated with cbindgen from the Rust library -- don't change it directly */"
+trailer = "/* File generated with cbindgen from the Rust library -- don't change it directly */"
