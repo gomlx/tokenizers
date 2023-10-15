@@ -45,7 +45,7 @@ var (
 
 const (
 	libraryName = "libgomlx_tokenizers.a"
-	headerName  = "gomlx_tokenizer.h"
+	headerName  = "gomlx_tokenizers.h"
 )
 
 // Builds the Rust library `libgomlx_tokenizers.a` for the current platform.
@@ -86,7 +86,7 @@ func Darwin_arm64() error {
 	return rustBuild("darwin/arm64")
 }
 
-// Header builds the `gomlx_tokenizer.h` header file from the Rust sources, using `cbindgen`.
+// Header builds the `internal/rs/gomlx_tokenizers.h` header file from the Rust sources, using `cbindgen`.
 func Header() error {
 	// Check whether target is up-to-date.
 	pwd := must1(os.Getwd())

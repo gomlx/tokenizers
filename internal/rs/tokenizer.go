@@ -9,10 +9,14 @@
 // End users should use the public library in [github.com/gomlx/tokenizers](https://github.com/gomlx/tokenizers) instead.
 package rs
 
+// The first lines below link the pre-built library according to the platform configured.
+// If adding support for a another platform, please also add the building rules in `magefile.go`, in
+// the project's root directory.
+
 /*
-#cgo LDFLAGS: ${SRCDIR}/libgomlx_tokenizers.a -ldl -lm -lstdc++
+#cgo linux&&amd64 LDFLAGS: ${SRCDIR}/../../lib/linux_amd64/libgomlx_tokenizers.a -ldl -lm -lstdc++
 #include <stdlib.h>
-#include "tokenizers.h"
+#include "gomlx_tokenizers.h"
 */
 import "C"
 
@@ -174,8 +178,8 @@ func (t *Tokenizer) Encode(str string, addSpecialTokens bool, opts ...EncodeOpti
 		cOffsets := (*[1 << 30]C.struct_Offset)(unsafe.Pointer(res.offsets))
 		for i := 0; i < resLen; i++ {
 			encodeResult.Offsets[i] = Offset{
-				Start: uint32(uintptr(unsafe.Pointer(cOffsets[i].start))), // Convert C.uintptr_t to uintptr
-				End:   uint32(uintptr(unsafe.Pointer(cOffsets[i].end))),   // Convert C.uintptr_t to uintptr
+				Start: uint32(cOffsets[i].start),
+				End:   uint32(cOffsets[i].end),
 			}
 		}
 	}
@@ -253,8 +257,8 @@ func (t *Tokenizer) EncodeBatch(strArr []string, addSpecialTokens bool, opts ...
 			cOffsets := (*[1 << 30]C.struct_Offset)(unsafe.Pointer(encodeResult.offsets))
 			for j := 0; j < subResLen; j++ {
 				subTokenizerResult.Offsets[j] = Offset{
-					Start: uint32(uintptr(unsafe.Pointer(cOffsets[j].start))), // Convert C.uintptr_t to uintptr
-					End:   uint32(uintptr(unsafe.Pointer(cOffsets[j].end))),   // Convert C.uintptr_t to uintptr
+					Start: uint32(cOffsets[j].start),
+					End:   uint32(cOffsets[j].end),
 				}
 			}
 		}

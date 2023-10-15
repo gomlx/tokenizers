@@ -6,8 +6,8 @@
 #include <stdlib.h>
 
 typedef struct Offset {
-  uintptr_t start;
-  uintptr_t end;
+  uint32_t start;
+  uint32_t end;
 } Offset;
 
 typedef struct Buffer {
@@ -43,10 +43,7 @@ void *from_bytes(const uint8_t *bytes, uint32_t len);
  * This function is return Tokenizer(truncation mode) object to Golang from
  * after read tokenizer.json to bytes
  */
-void *from_bytes_with_truncation(const uint8_t *bytes,
-                                 uint32_t len,
-                                 uintptr_t max_len,
-                                 uint8_t dir);
+void *from_bytes_with_truncation(const uint8_t *bytes, uint32_t len, uint32_t max_len, uint8_t dir);
 
 /**
  * # Safety

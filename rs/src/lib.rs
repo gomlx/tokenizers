@@ -5,10 +5,12 @@ use tokenizers::Encoding;
 
 use tokenizers::tokenizer::Tokenizer;
 
+// Offset of the original library uses `usize` which is the size of the pointer.
+// The Go library limits this to u32 -- we don't expect strings larger than ~4GB.
 #[repr(C)]
 pub struct Offset {
-    start: usize,
-    end: usize,
+    start: u32,
+    end: u32,
 }
 
 #[repr(C)]
@@ -55,14 +57,14 @@ pub unsafe extern "C" fn from_bytes(bytes: *const u8, len: u32) -> *mut libc::c_
 pub unsafe extern "C" fn from_bytes_with_truncation(
     bytes: *const u8,
     len: u32,
-    max_len: usize,
+    max_len: u32,
     dir: u8,
 ) -> *mut libc::c_void {
     let bytes_slice = unsafe { std::slice::from_raw_parts(bytes, len as usize) };
     let tokenizer: Tokenizer = Tokenizer::from_bytes(bytes_slice)
         .expect("failed to create tokenizer")
         .with_truncation(Some(tokenizers::tokenizer::TruncationParams {
-            max_length: max_len,
+            max_length: max_len as usize,
             direction: match dir {
                 0 => tokenizers::tokenizer::TruncationDirection::Left,
                 1 => tokenizers::tokenizer::TruncationDirection::Right,
@@ -146,8 +148,8 @@ fn encode_process(encoding: Encoding, options: &EncodeOptions) -> Buffer {
             .get_offsets()
             .iter()
             .map(|s| Offset {
-                start: s.0,
-                end: s.1,
+                start: s.0 as u32,
+                end: s.1 as u32,
             })
             .collect::<Vec<_>>();
         vec_offsets.shrink_to_fit();
