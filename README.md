@@ -11,7 +11,18 @@ Tokenizers for Language Models - Go API for [HuggingFace Tokenizers](https://git
 
 ## Installation
 
-This library is a wrapper around the Rust implementation by HuggingFace, and hence requires a the Rust library to be compiled and available in the system (for CGO to link it).
+This library is a wrapper around the Rust implementation by HuggingFace, and it requires the compiled Rust
+code available as a `libgomlx_tokenizers.a`. 
+
+To make that easy, the project provides a prebuilt `libgomlx_tokenizers.a` in the git repository (for the popular
+platforms), so for many nothing is needed (except having CGO enabled -- for cross-compilation set `CGO_ENABLED=1`),
+and it can be simply included as any other Go library.
+
+If you want to build the underlying Rust wrapper and dependencies yourselves for any reason (including maybe 
+to add support for a different platform), it uses the [Mage](https://magefile.org/) build system -- an improved
+`Makefile`-like that uses Go. 
+
+If you create a new rule for a different platform, please consider contributing it back :smile:
 
 > [!IMPORTANT]  
 > TODO

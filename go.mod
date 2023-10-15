@@ -1,8 +1,13 @@
-module github.com/sunhailin-Leo/tokenizers
+module tokenizers
 
-go 1.18
+go 1.21
 
-require github.com/stretchr/testify v1.8.4
+require (
+	github.com/magefile/mage v1.15.0
+	github.com/pkg/errors v0.9.1
+	github.com/stretchr/testify v1.8.4
+	github.com/sunhailin-Leo/tokenizers v0.6.1
+)
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
