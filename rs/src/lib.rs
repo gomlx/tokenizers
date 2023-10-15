@@ -39,11 +39,12 @@ pub struct EncodeOptions {
 /// This function is return Tokenizer object to Golang from
 /// after reading tokenizer.json to bytes
 #[no_mangle]
-pub unsafe extern "C" fn from_bytes(bytes: *const u8, len: u32) -> *mut Tokenizer {
+pub unsafe extern "C" fn from_bytes(bytes: *const u8, len: u32) -> *mut libc::c_void {
     let bytes_slice = unsafe { std::slice::from_raw_parts(bytes, len as usize) };
     let tokenizer = Tokenizer::from_bytes(bytes_slice).expect("failed to create tokenizer");
 
-    Box::into_raw(Box::new(tokenizer))
+    let ptr = Box::into_raw(Box::new(tokenizer));
+    ptr.cast()
 }
 
 /// # Safety
@@ -56,7 +57,7 @@ pub unsafe extern "C" fn from_bytes_with_truncation(
     len: u32,
     max_len: usize,
     dir: u8,
-) -> *mut Tokenizer {
+) -> *mut libc::c_void {
     let bytes_slice = unsafe { std::slice::from_raw_parts(bytes, len as usize) };
     let tokenizer: Tokenizer = Tokenizer::from_bytes(bytes_slice)
         .expect("failed to create tokenizer")
@@ -73,7 +74,8 @@ pub unsafe extern "C" fn from_bytes_with_truncation(
         .to_owned()
         .into();
 
-    Box::into_raw(Box::new(tokenizer))
+    let ptr = Box::into_raw(Box::new(tokenizer));
+    ptr.cast()
 }
 
 /// # Safety
