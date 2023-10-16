@@ -1,3 +1,5 @@
+mod configure;
+
 use std::ffi::CStr;
 use std::path::PathBuf;
 use std::ptr::null_mut;
@@ -36,10 +38,12 @@ pub struct EncodeOptions {
     with_offsets_char_mode: bool,
 }
 
+/// This function returns a Tokenizer reference to Golang, casted as a C `void*` after reading
+/// tokenizer.json to bytes.
+///
 /// # Safety
 ///
-/// This function is return Tokenizer object to Golang from
-/// after reading tokenizer.json to bytes
+/// The caller has ownership of `bytes` and of the returned `Tokenizer`.
 #[no_mangle]
 pub unsafe extern "C" fn from_bytes(bytes: *const u8, len: u32) -> *mut libc::c_void {
     let bytes_slice = unsafe { std::slice::from_raw_parts(bytes, len as usize) };
@@ -49,10 +53,11 @@ pub unsafe extern "C" fn from_bytes(bytes: *const u8, len: u32) -> *mut libc::c_
     ptr.cast()
 }
 
-/// # Safety
-///
 /// This function is return Tokenizer(truncation mode) object to Golang from
 /// after read tokenizer.json to bytes
+///
+/// # Safety
+///
 #[no_mangle]
 pub unsafe extern "C" fn from_bytes_with_truncation(
     bytes: *const u8,

@@ -21,6 +21,7 @@ package rs
 import "C"
 
 import (
+	"github.com/pkg/errors"
 	"io"
 	"runtime"
 	"unsafe"
@@ -140,10 +141,42 @@ func FromFile(path string) (*Tokenizer, error) {
 	return &Tokenizer{tokenizer: tokenizer}, nil
 }
 
+func errorFromCStr(cStr *C.char) error {
+	if cStr == nil {
+		return nil
+	}
+	err := errors.New(C.GoString(cStr))
+	C.free_string(cStr)
+	return err
+}
+
+// SetTruncation change the tokenizer truncation.
+// - direction: // 0 -> Left (*); 1 -> Right
+// - 0 -> LongestFirst (*), 1 -> OnlyFirst, 2 -> OnlySecond,
+func (t *Tokenizer) SetTruncation(
+	direction uint8, maxLength uint32, strategy uint8, stride uint32) error {
+	params := &C.TruncationParameters{
+		direction:  C.uint8_t(direction),
+		max_length: C.uint32_t(maxLength),
+		strategy:   C.uint8_t(strategy),
+		stride:     C.uint32_t(stride),
+	}
+	defer runtime.KeepAlive(t)
+	return errorFromCStr(
+		C.with_truncation(t.tokenizer, params))
+}
+
+// SetNoTruncation changes the tokenizer to not use truncation.
+func (t *Tokenizer) SetNoTruncation() error {
+	defer runtime.KeepAlive(t)
+	return errorFromCStr(
+		C.with_truncation(t.tokenizer, nil))
+}
+
 func (t *Tokenizer) Close() error {
+	defer runtime.KeepAlive(t)
 	C.free_tokenizer(t.tokenizer)
 	t.tokenizer = nil
-
 	return nil
 }
 

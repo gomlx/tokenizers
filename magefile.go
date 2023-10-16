@@ -1,6 +1,7 @@
 //go:build mage
 
 // Builds the underlying Rust dependencies for the GoMLX Tokenizers project.
+// See https://magefile.org for documentation on how to use magefiles.
 
 package main
 
@@ -52,7 +53,7 @@ const (
 // It uses the `mapGoPlatformToFunction` to map the platform to the corresponding target function.
 func Build() error {
 	mg.Deps(Header)
-	return rustBuild(getGoPlatform())
+	return rustBuild(false, getGoPlatform())
 }
 
 // Builds the Rust library `libgomlx_tokenizers.a` for each of the platforms included for release by default --
@@ -64,26 +65,28 @@ func Release() error {
 	// Trying to parallelize the building Rust code will probably be slower, since each one will already be parallelized
 	// by `cargo`.
 	//mg.SerialDeps(Linux_amd64, Darwin_arm64, Darwin_amd64)
-	mg.SerialDeps(Header, Build)
-	return nil
+	//return nil
+
+	// For now only build release version of current platform.
+	return rustBuild(true, getGoPlatform())
 }
 
 // Builds the Rust library `libgomlx_tokenizers.a` for linux/amd64 platform.
 func Linux_amd64() error {
 	mg.Deps(Header)
-	return rustBuild("linux/amd64")
+	return rustBuild(true, "linux/amd64")
 }
 
 // Builds the Rust library `libgomlx_tokenizers.a` for darwin/amd64 platform.
 func Darwin_amd64() error {
 	mg.Deps(Header)
-	return rustBuild("darwin/amd64")
+	return rustBuild(true, "darwin/amd64")
 }
 
 // Builds the Rust library `libgomlx_tokenizers.a` for darwin/arm64 platform.
 func Darwin_arm64() error {
 	mg.Deps(Header)
-	return rustBuild("darwin/arm64")
+	return rustBuild(true, "darwin/arm64")
 }
 
 // Header builds the `internal/rs/gomlx_tokenizers.h` header file from the Rust sources, using `cbindgen`.
@@ -119,7 +122,10 @@ func Header() error {
 
 // rustBuild builds the rust library `libgomlx_tokenizers.a` for the corresponding Go platform.
 // The resulting binary library is stored in `lib/<goPlatform>/` subdirectory.
-func rustBuild(goPlatform string) error {
+//
+// If isRelease is false, it will not use `--release` and it will ignore the platform, instead
+// always compiling to the current platform.
+func rustBuild(isRelease bool, goPlatform string) error {
 	rustPlatform, found := mapGoPlatformToRustPlatform[goPlatform]
 	if !found {
 		return fmt.Errorf("platform %q in Rust is not configured -- "+
@@ -149,12 +155,22 @@ func rustBuild(goPlatform string) error {
 	// Build from rust directory `rs`.
 	must(os.Chdir("rs"))
 	fmt.Printf("Building for platform %q\n", goPlatform)
-	err = sh.Run("cargo", "build", "--release", "--target", rustPlatform)
+	args := []string{"build"}
+	if isRelease {
+		args = append(args, "--release", "--target", rustPlatform)
+	}
+	err = sh.Run("cargo", args...)
 	must(os.Chdir(".."))
 	if err != nil {
 		return err
 	}
-	return sh.Copy(dst, path.Join("rs", "target", rustPlatform, "release", libraryName))
+	var generateLibPath string
+	if isRelease {
+		generateLibPath = path.Join("rs", "target", rustPlatform, "release", libraryName)
+	} else {
+		generateLibPath = path.Join("rs", "target", "debug", libraryName)
+	}
+	return sh.Copy(dst, generateLibPath)
 }
 
 // getGoPlatform return `$GOOS/$GOARCH`.

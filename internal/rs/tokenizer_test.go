@@ -283,7 +283,9 @@ func TestEncodeWithTruncation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tk, err := rs.FromBytesWithTruncation(embeddedBytes, uint32(tt.maxLen), tt.dir)
+			tk, err := rs.FromBytes(embeddedBytes)
+			require.NoError(t, err)
+			err = tk.SetTruncation(uint8(tt.dir), uint32(tt.maxLen), 0, 0)
 			require.NoError(t, err)
 			defer tk.Close()
 
