@@ -91,7 +91,7 @@ func Header() error {
 	// Check whether target is up-to-date.
 	pwd := must1(os.Getwd())
 	dst := path.Join(pwd, "internal", "rs", headerName)
-	modified, err := target.Glob(dst, "rs/Cargo.toml", "rs/src/*.rs")
+	modified, err := target.Glob(dst, "rs/cbindgen.toml", "rs/Cargo.toml", "rs/src/*.rs")
 	if err != nil {
 		return err
 	}
@@ -107,6 +107,9 @@ func Header() error {
 	}
 
 	// Build header file.
+	if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
+		return errors.WithMessagef(err, "removing previous copy of %q", dst)
+	}
 	must(os.Chdir("rs"))
 	fmt.Printf("Building header file %q\n", dst)
 	err = sh.Run("cbindgen", "--config", "cbindgen.toml", "--output", dst)
