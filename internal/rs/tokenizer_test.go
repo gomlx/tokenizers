@@ -285,9 +285,10 @@ func TestEncodeWithTruncation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tk, err := rs.FromBytes(embeddedBytes)
 			require.NoError(t, err)
+			defer func() { _ = tk.Close() }()
+
 			err = tk.SetTruncation(uint8(tt.dir), uint32(tt.maxLen), 0, 0)
 			require.NoError(t, err)
-			defer tk.Close()
 
 			tk.Encode(tt.str, tt.addSpecial)
 			encodeRes := tk.Encode(tt.str, tt.addSpecial)
@@ -298,6 +299,59 @@ func TestEncodeWithTruncation(t *testing.T) {
 }
 
 func TestEncodeWithPadding(t *testing.T) {
+	tests := []struct {
+		name            string
+		str             string
+		addSpecial      bool
+		padLen          uint32
+		dir             uint8 // 0 -> Left, 1 -> Right
+		padId           uint32
+		padToken        string
+		padToMultipleOf uint32
+		wantIDs         []uint32
+		wantTokens      []string
+	}{
+		{
+			name:            "without special tokens, left padding",
+			str:             "brown fox jumps over the lazy dog",
+			addSpecial:      false,
+			padLen:          8,
+			dir:             0,
+			padId:           0,
+			padToken:        "[PAD]",
+			padToMultipleOf: 0,
+			wantIDs:         []uint32{0x0, 0xca3f, 0x2f304, 0x5185b, 0x3c54, 0x3a89, 0x35fc3, 0x57b4},
+			wantTokens:      []string{"[PAD]", "brown", "fox", "jumps", "over", "the", "lazy", "dog"},
+		},
+		{
+			name:            "with special tokens, right padding, multiple of 16",
+			str:             "brown fox jumps over the lazy dog",
+			addSpecial:      true,
+			padLen:          0,
+			dir:             1,
+			padId:           0,
+			padToken:        "",
+			padToMultipleOf: 4, // Since it tokenizes to 9 elements, it will pad to 12 (next multiple of 4).
+			wantIDs:         []uint32{0x65, 0xca3f, 0x2f304, 0x5185b, 0x3c54, 0x3a89, 0x35fc3, 0x57b4, 0x66, 0x0, 0x0, 0x0},
+			wantTokens:      []string{"[CLS]", "brown", "fox", "jumps", "over", "the", "lazy", "dog", "[SEP]", "", "", ""},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tk, err := rs.FromBytes(embeddedBytes)
+			require.NoError(t, err)
+			defer func() { _ = tk.Close() }()
+			tk.SetPadding(tt.padLen, tt.dir, tt.padToMultipleOf, tt.padId, 0, tt.padToken)
+
+			tk.Encode(tt.str, tt.addSpecial)
+			encodeRes := tk.Encode(tt.str, tt.addSpecial)
+			assert.Equal(t, tt.wantIDs, encodeRes.TokenIds)
+			assert.Equal(t, tt.wantTokens, encodeRes.Tokens)
+		})
+	}
+}
+
+func TestEncodeWithPaddingBert(t *testing.T) {
 	tests := []struct {
 		name       string
 		str        string
@@ -317,8 +371,7 @@ func TestEncodeWithPadding(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// tk, err := rs.FromBytesWithPadding(embeddedBytesV1, uint32(tt.maxLen))
-			tk, err := rs.FromFile(bertPaddingJson)
+			tk, err := rs.FromFile(bertPaddingJson) // Padding pre-configured in Json file.
 			require.NoError(t, err)
 			defer tk.Close()
 

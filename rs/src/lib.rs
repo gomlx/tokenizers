@@ -173,18 +173,16 @@ fn encode_process(encoding: Encoding, options: &EncodeOptions) -> Buffer {
     }
 }
 
-/// # Safety
-///
-/// This function is tokenizer single encode function
+/// Encodes string using given tokenizer and EncodeOptions.
 #[no_mangle]
 pub unsafe extern "C" fn encode(
-    ptr: *mut libc::c_void,
+    tokenizer_ptr: *mut libc::c_void,
     message: *const libc::c_char,
     options: &EncodeOptions,
 ) -> Buffer {
     let tokenizer: &Tokenizer;
     unsafe {
-        tokenizer = ptr
+        tokenizer = tokenizer_ptr
             .cast::<Tokenizer>()
             .as_ref()
             .expect("failed to cast tokenizer");
@@ -205,12 +203,10 @@ pub unsafe extern "C" fn encode(
     encode_process(encoding, options)
 }
 
-/// # Safety
-///
-/// This function is tokenizer batch encode function
+/// Encode a batch of strings using given tokenizer and EncodeOptions.
 #[no_mangle]
 pub unsafe extern "C" fn encode_batch(
-    ptr: *mut libc::c_void,
+    tokenizer_ptr: *mut libc::c_void,
     messages: *const *const libc::c_char,
     options: &EncodeOptions,
 ) -> *mut Buffer {
@@ -219,7 +215,7 @@ pub unsafe extern "C" fn encode_batch(
     let mut encode_messages: Vec<String> = Vec::new();
 
     unsafe {
-        tokenizer = ptr
+        tokenizer = tokenizer_ptr
             .cast::<Tokenizer>()
             .as_ref()
             .expect("failed to cast tokenizer");
@@ -256,19 +252,18 @@ pub unsafe extern "C" fn encode_batch(
     encode_results
 }
 
-/// # Safety
-///
-/// This function is tokenizer decode function
+/// tokenizer.Decode method.
+/// The returned string needs to be deallocated with `free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn decode(
-    ptr: *mut libc::c_void,
+    tokenizer_ptr: *mut libc::c_void,
     ids: *const u32,
     len: u32,
     skip_special_tokens: bool,
 ) -> *mut libc::c_char {
     let tokenizer: &Tokenizer;
     unsafe {
-        tokenizer = ptr
+        tokenizer = tokenizer_ptr
             .cast::<Tokenizer>()
             .as_ref()
             .expect("failed to cast tokenizer");

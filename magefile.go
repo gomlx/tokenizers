@@ -52,8 +52,11 @@ const (
 // Builds the Rust library `libgomlx_tokenizers.a` for the current platform.
 // It uses the `mapGoPlatformToFunction` to map the platform to the corresponding target function.
 func Build() error {
-	mg.Deps(Header)
-	return rustBuild(false, getGoPlatform())
+	err := rustBuild(false, getGoPlatform())
+	if err == nil {
+		mg.Deps(Header)
+	}
+	return err
 }
 
 // Builds the Rust library `libgomlx_tokenizers.a` for each of the platforms included for release by default --

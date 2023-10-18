@@ -150,12 +150,12 @@ func errorFromCStr(cStr *C.char) error {
 	return err
 }
 
-// SetTruncation change the tokenizer truncation.
+// SetTruncation changes the tokenizer truncation.
 // - direction: // 0 -> Left (*); 1 -> Right
 // - 0 -> LongestFirst (*), 1 -> OnlyFirst, 2 -> OnlySecond,
 func (t *Tokenizer) SetTruncation(
 	direction uint8, maxLength uint32, strategy uint8, stride uint32) error {
-	params := &C.TruncationParameters{
+	params := &C.TruncationParams{
 		direction:  C.uint8_t(direction),
 		max_length: C.uint32_t(maxLength),
 		strategy:   C.uint8_t(strategy),
@@ -163,14 +163,44 @@ func (t *Tokenizer) SetTruncation(
 	}
 	defer runtime.KeepAlive(t)
 	return errorFromCStr(
-		C.with_truncation(t.tokenizer, params))
+		C.set_truncation(t.tokenizer, params))
 }
 
 // SetNoTruncation changes the tokenizer to not use truncation.
 func (t *Tokenizer) SetNoTruncation() error {
 	defer runtime.KeepAlive(t)
 	return errorFromCStr(
-		C.with_truncation(t.tokenizer, nil))
+		C.set_truncation(t.tokenizer, nil))
+}
+
+// SetPadding changes the tokenizer padding configuration.
+// - strategy: 0 -> BatchLongest, >0 -> Fixed to the given value.
+// - direction: 0 -> Left (*); 1 -> Right.
+func (t *Tokenizer) SetPadding(
+	strategy uint32, direction uint8, padToMultipleOf, padId, padTypeId uint32, padToken string) {
+	var padTokenCStr *C.char
+	if padToken != "" {
+		padTokenCStr = C.CString(padToken)
+	}
+	params := &C.PaddingParams{
+		strategy:           C.uint32_t(strategy),        // 0 -> BatchLongest, >0 -> Fixed(value)
+		direction:          C.uint8_t(direction),        // 0 -> Left, !=0 -> Right
+		pad_to_multiple_of: C.uint32_t(padToMultipleOf), // Disabled if 0.
+		pad_id:             C.uint32_t(padId),
+		pad_type_id:        C.uint32_t(padTypeId),
+		pad_token:          padTokenCStr,
+	}
+	defer runtime.KeepAlive(t)
+	C.set_padding(t.tokenizer, params)
+	if padTokenCStr != nil {
+		C.free(unsafe.Pointer(padTokenCStr))
+	}
+}
+
+// SetNoPadding changes the tokenizer not to use padding.
+func (t *Tokenizer) SetNoPadding() {
+	defer runtime.KeepAlive(t)
+	C.set_padding(t.tokenizer, nil)
 }
 
 func (t *Tokenizer) Close() error {

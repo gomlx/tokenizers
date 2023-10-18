@@ -33,12 +33,25 @@ typedef struct EncodeOptions {
  * TruncationParameters represents the truncation parameters
  * that can be set with "with_truncation".
  */
-typedef struct TruncationParameters {
+typedef struct TruncationParams {
   uint8_t direction;
   uint8_t strategy;
   uint32_t max_length;
   uint32_t stride;
-} TruncationParameters;
+} TruncationParams;
+
+/**
+ * PaddingParams represents the padding parameters: it maps to the values in
+ * tokenizers::tokenizer::PaddingParams.
+ */
+typedef struct PaddingParams {
+  uint32_t strategy;
+  uint8_t direction;
+  uint32_t pad_to_multiple_of;
+  uint32_t pad_id;
+  uint32_t pad_type_id;
+  const char *pad_token;
+} PaddingParams;
 
 /**
  * This function returns a Tokenizer reference to Golang, casted as a C `void*` after reading
@@ -67,27 +80,22 @@ void *from_bytes_with_truncation(const uint8_t *bytes, uint32_t len, uint32_t ma
 void *from_file(const char *config);
 
 /**
- * # Safety
- *
- * This function is tokenizer single encode function
+ * Encodes string using given tokenizer and EncodeOptions.
  */
-struct Buffer encode(void *ptr, const char *message, const struct EncodeOptions *options);
+struct Buffer encode(void *tokenizer_ptr, const char *message, const struct EncodeOptions *options);
 
 /**
- * # Safety
- *
- * This function is tokenizer batch encode function
+ * Encode a batch of strings using given tokenizer and EncodeOptions.
  */
-struct Buffer *encode_batch(void *ptr,
+struct Buffer *encode_batch(void *tokenizer_ptr,
                             const char *const *messages,
                             const struct EncodeOptions *options);
 
 /**
- * # Safety
- *
- * This function is tokenizer decode function
+ * tokenizer.Decode method.
+ * The returned string needs to be deallocated with `free_string`.
  */
-char *decode(void *ptr, const uint32_t *ids, uint32_t len, bool skip_special_tokens);
+char *decode(void *tokenizer_ptr, const uint32_t *ids, uint32_t len, bool skip_special_tokens);
 
 /**
  * # Safety
@@ -125,9 +133,17 @@ void free_batch_buffer(struct Buffer *bufs);
 void free_string(char *ptr);
 
 /**
- * with_truncation modifies the given tokenizer with the given truncation parameters.
- * It returns a string with an error message (owned by caller) if something went wrong.
+ * set_truncation modifies the tokenizer with the given truncation parameters.
+ * It returns null if ok, or a string with an error message (owned by caller) if something went wrong.
+ * The returned string needs to be freed with `free_string`.
  */
-char *with_truncation(void *tokenizer_ptr, const struct TruncationParameters *params);
+char *set_truncation(void *tokenizer_ptr,
+                     const struct TruncationParams *params);
+
+/**
+ * set_padding modifies the tokenizer with the given padding parameters.
+ * It doesn't return anything.
+ */
+void set_padding(void *tokenizer_ptr, const struct PaddingParams *params);
 
 /* File generated with cbindgen from the Rust library -- don't change it directly */
