@@ -41,62 +41,54 @@ type TokenizerResult struct {
 	Offsets           []Offset
 }
 
-type EncodeOptions struct {
-	AddSpecialTokens C.bool
-
-	ReturnTypeIds           C.bool
-	ReturnSpecialTokensMask C.bool
-	ReturnAttentionMask     C.bool
-	ReturnOffsets           C.bool
-
-	WithOffsetsCharMode C.bool
-}
-
-type EncodeOption func(eo *EncodeOptions)
+type EncodeParams = C.EncodeParams
+type EncodeOption func(eo *EncodeParams)
 
 func WithReturnAll(withCharMode bool) EncodeOption {
-	return func(eo *EncodeOptions) {
-		eo.ReturnTypeIds = C.bool(true)
-		eo.ReturnSpecialTokensMask = C.bool(true)
-		eo.ReturnAttentionMask = C.bool(true)
-		eo.ReturnOffsets = C.bool(true)
-		eo.WithOffsetsCharMode = C.bool(withCharMode)
+	return func(eo *EncodeParams) {
+		*eo = EncodeParams{
+			return_type_ids:            true,
+			return_special_tokens_mask: true,
+			return_attention_mask:      true,
+			return_offsets:             true,
+			with_offsets_char_mode:     C.bool(withCharMode),
+		}
 	}
 }
 
 func WithReturnTypeIds() EncodeOption {
-	return func(eo *EncodeOptions) {
-		eo.ReturnTypeIds = C.bool(true)
+	return func(eo *EncodeParams) {
+		eo.return_type_ids = true
 	}
 }
 
 func WithReturnSpecialTokensMask() EncodeOption {
-	return func(eo *EncodeOptions) {
-		eo.ReturnSpecialTokensMask = C.bool(true)
+	return func(eo *EncodeParams) {
+		eo.return_special_tokens_mask = true
 	}
 }
 
 func WithReturnAttentionMask() EncodeOption {
-	return func(eo *EncodeOptions) {
-		eo.ReturnAttentionMask = C.bool(true)
+	return func(eo *EncodeParams) {
+		eo.return_attention_mask = true
 	}
 }
 
 func WithReturnOffsets() EncodeOption {
-	return func(eo *EncodeOptions) {
-		eo.ReturnOffsets = C.bool(true)
+	return func(eo *EncodeParams) {
+		eo.return_offsets = true
 	}
 }
 
 func WithReturnCharModeOffsets() EncodeOption {
-	return func(eo *EncodeOptions) {
-		eo.ReturnOffsets = C.bool(true)
-		eo.WithOffsetsCharMode = C.bool(true)
+	return func(eo *EncodeParams) {
+		eo.return_offsets = C.bool(true)
+		eo.with_offsets_char_mode = C.bool(true)
 	}
 }
 
 // uint vector to golang slice
-func uintVecToSlice(arrPtr *C.uint, arrLen int) []uint32 {
+func uint32VecToSlice(arrPtr *C.uint32_t, arrLen int) []uint32 {
 	slice := make([]uint32, arrLen)
 	for i, v := range unsafe.Slice(arrPtr, arrLen) {
 		slice[i] = uint32(v)
@@ -120,12 +112,6 @@ var _ io.Closer = (*Tokenizer)(nil)
 
 func FromBytes(data []byte) (*Tokenizer, error) {
 	tokenizer := C.from_bytes((*C.uchar)(unsafe.Pointer(&data[0])), C.uint(len(data)))
-
-	return &Tokenizer{tokenizer: tokenizer}, nil
-}
-
-func FromBytesWithTruncation(data []byte, maxLen uint32, dir TruncationDirection) (*Tokenizer, error) {
-	tokenizer := C.from_bytes_with_truncation((*C.uchar)(unsafe.Pointer(&data[0])), C.uint(len(data)), C.uint(maxLen), C.uchar(dir))
 
 	return &Tokenizer{tokenizer: tokenizer}, nil
 }
@@ -214,32 +200,33 @@ func (t *Tokenizer) Encode(str string, addSpecialTokens bool, opts ...EncodeOpti
 	cStr := C.CString(str)
 	defer C.free(unsafe.Pointer(cStr))
 
-	encOptions := EncodeOptions{AddSpecialTokens: C.bool(addSpecialTokens)}
+	encParams := EncodeParams{add_special_tokens: C.bool(addSpecialTokens)}
 	for _, opt := range opts {
-		opt(&encOptions)
+		opt(&encParams)
 	}
 
-	res := C.encode(t.tokenizer, cStr, (*C.struct_EncodeOptions)(unsafe.Pointer(&encOptions)))
-	resLen := int(res.len)
-	if resLen == 0 {
+	// We expected an EncodedResults with only one result.
+	res := C.encode(t.tokenizer, cStr, encParams)
+	defer C.free_encode_results(res)
+	if res.len != 1 || res.encoded.len == 0 {
 		return new(TokenizerResult)
 	}
-	defer C.free_buffer(res)
-
-	encodeResult := &TokenizerResult{Tokens: make([]string, resLen)}
+	buf := *res.encoded
+	bufLen := int(buf.len)
+	encodeResult := &TokenizerResult{Tokens: make([]string, bufLen)}
 	// TokenIds
-	encodeResult.TokenIds = uintVecToSlice(res.ids, resLen)
+	encodeResult.TokenIds = uint32VecToSlice(buf.ids, bufLen)
 
 	// Tokens
-	for i, s := range (*[1 << 30]*C.char)(unsafe.Pointer(res.tokens))[:resLen:resLen] {
+	for i, s := range (*[1 << 30]*C.char)(unsafe.Pointer(buf.tokens))[:bufLen:bufLen] {
 		encodeResult.Tokens[i] = C.GoString(s)
 	}
 
 	// Token offsets
-	if encOptions.ReturnOffsets && res.offsets != nil {
-		encodeResult.Offsets = make([]Offset, resLen)
-		cOffsets := (*[1 << 30]C.struct_Offset)(unsafe.Pointer(res.offsets))
-		for i := 0; i < resLen; i++ {
+	if encParams.return_offsets && buf.offsets != nil {
+		encodeResult.Offsets = make([]Offset, bufLen)
+		cOffsets := (*[1 << 30]C.struct_Offset)(unsafe.Pointer(buf.offsets))
+		for i := 0; i < bufLen; i++ {
 			encodeResult.Offsets[i] = Offset{
 				Start: uint32(cOffsets[i].start),
 				End:   uint32(cOffsets[i].end),
@@ -248,18 +235,18 @@ func (t *Tokenizer) Encode(str string, addSpecialTokens bool, opts ...EncodeOpti
 	}
 
 	// TypeIds
-	if encOptions.ReturnTypeIds && res.type_ids != nil {
-		encodeResult.TypeIds = uintVecToSlice(res.type_ids, resLen)
+	if encParams.return_type_ids && buf.type_ids != nil {
+		encodeResult.TypeIds = uint32VecToSlice(buf.type_ids, bufLen)
 	}
 
 	// SpecialTokensMask
-	if encOptions.ReturnSpecialTokensMask && res.special_tokens_mask != nil {
-		encodeResult.SpecialTokensMask = uintVecToSlice(res.special_tokens_mask, resLen)
+	if encParams.return_special_tokens_mask && buf.special_tokens_mask != nil {
+		encodeResult.SpecialTokensMask = uint32VecToSlice(buf.special_tokens_mask, bufLen)
 	}
 
 	// AttentionMask
-	if encOptions.ReturnAttentionMask && res.attention_mask != nil {
-		encodeResult.AttentionMask = uintVecToSlice(res.attention_mask, resLen)
+	if encParams.return_attention_mask && buf.attention_mask != nil {
+		encodeResult.AttentionMask = uint32VecToSlice(buf.attention_mask, bufLen)
 	}
 
 	return encodeResult
@@ -272,9 +259,9 @@ func (t *Tokenizer) EncodeBatch(strArr []string, addSpecialTokens bool, opts ...
 	}
 
 	// parse encode options
-	encOptions := EncodeOptions{AddSpecialTokens: C.bool(addSpecialTokens)}
+	encParams := EncodeParams{add_special_tokens: C.bool(addSpecialTokens)}
 	for _, opt := range opts {
-		opt(&encOptions)
+		opt(&encParams)
 	}
 
 	// Make string vector to Rust
@@ -289,25 +276,28 @@ func (t *Tokenizer) EncodeBatch(strArr []string, addSpecialTokens bool, opts ...
 		}
 	}()
 
-	// call encode batch
-	batchRes := C.encode_batch(
+	// EncodeResults with batchLen results.
+	results := C.encode_batch(
 		t.tokenizer,
 		(**C.char)(unsafe.Pointer(&cStrings[0])),
-		(*C.struct_EncodeOptions)(unsafe.Pointer(&encOptions)),
+		encParams,
 	)
-	runtime.KeepAlive(encOptions)
+	defer C.free_encode_results(results)
+	if int(results.len) != batchLen {
+		// Something went wrong. TODO: add errors.
+		return nil
+	}
+	runtime.KeepAlive(encParams)
 
 	// parse tokenizer encode result
 	batchResult := make([]*TokenizerResult, batchLen)
-	if batchLen > 0 {
-		defer C.free_batch_buffer(batchRes)
-	}
-	for i, encodeResult := range (*[1 << 30]C.struct_Buffer)(unsafe.Pointer(batchRes))[:batchLen:batchLen] {
+	buffers := unsafe.Slice((*C.Buffer)(unsafe.Pointer(results.encoded)), batchLen)
+	for i, encodeResult := range buffers {
 		subResLen := int(encodeResult.len)
 		subTokenizerResult := &TokenizerResult{Tokens: make([]string, subResLen)}
 
 		// TokenIds
-		subTokenizerResult.TokenIds = uintVecToSlice(encodeResult.ids, subResLen)
+		subTokenizerResult.TokenIds = uint32VecToSlice(encodeResult.ids, subResLen)
 
 		// Tokens
 		for j, s := range (*[1 << 30]*C.char)(unsafe.Pointer(encodeResult.tokens))[:subResLen:subResLen] {
@@ -315,7 +305,7 @@ func (t *Tokenizer) EncodeBatch(strArr []string, addSpecialTokens bool, opts ...
 		}
 
 		// Token offsets
-		if encOptions.ReturnOffsets && encodeResult.offsets != nil {
+		if encParams.return_offsets && encodeResult.offsets != nil {
 			subTokenizerResult.Offsets = make([]Offset, subResLen)
 			cOffsets := (*[1 << 30]C.struct_Offset)(unsafe.Pointer(encodeResult.offsets))
 			for j := 0; j < subResLen; j++ {
@@ -327,18 +317,18 @@ func (t *Tokenizer) EncodeBatch(strArr []string, addSpecialTokens bool, opts ...
 		}
 
 		// TypeIds
-		if encOptions.ReturnTypeIds && encodeResult.type_ids != nil {
-			subTokenizerResult.TypeIds = uintVecToSlice(encodeResult.type_ids, subResLen)
+		if encParams.return_type_ids && encodeResult.type_ids != nil {
+			subTokenizerResult.TypeIds = uint32VecToSlice(encodeResult.type_ids, subResLen)
 		}
 
 		// SpecialTokensMask
-		if encOptions.ReturnSpecialTokensMask && encodeResult.special_tokens_mask != nil {
-			subTokenizerResult.SpecialTokensMask = uintVecToSlice(encodeResult.special_tokens_mask, subResLen)
+		if encParams.return_special_tokens_mask && encodeResult.special_tokens_mask != nil {
+			subTokenizerResult.SpecialTokensMask = uint32VecToSlice(encodeResult.special_tokens_mask, subResLen)
 		}
 
 		// AttentionMask
-		if encOptions.ReturnAttentionMask && encodeResult.attention_mask != nil {
-			subTokenizerResult.AttentionMask = uintVecToSlice(encodeResult.attention_mask, subResLen)
+		if encParams.return_attention_mask && encodeResult.attention_mask != nil {
+			subTokenizerResult.AttentionMask = uint32VecToSlice(encodeResult.attention_mask, subResLen)
 		}
 
 		batchResult[i] = subTokenizerResult

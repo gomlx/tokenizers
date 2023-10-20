@@ -220,17 +220,23 @@ func TestEncodeBatch(t *testing.T) {
 			wantTokens: []string{"brown", "fox", "jumps", "over", "the", "lazy", "dog"},
 		},
 		{
-			name:       "without special tokens-2",
+			name:       "with special tokens-1",
 			str:        "brown fox jumps over the lazy dog",
-			addSpecial: false,
-			wantIDs:    []uint32{2829, 4419, 14523, 2058, 1996, 13971, 4937},
-			wantTokens: []string{"brown", "fox", "jumps", "over", "the", "lazy", "cat"},
+			addSpecial: true,
+			wantIDs:    []uint32{101, 2829, 4419, 14523, 2058, 1996, 13971, 3899, 102},
+			wantTokens: []string{"[CLS]", "brown", "fox", "jumps", "over", "the", "lazy", "dog", "[SEP]"},
 		},
 	}
 
-	for i, tt := range tk.EncodeBatch([]string{"brown fox jumps over the lazy dog", "brown fox jumps over the lazy cat"}, false) {
-		assert.Equal(t, tests[i].wantIDs, tt.TokenIds)
-		assert.Equal(t, tests[i].wantTokens, tt.Tokens)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			results := tk.EncodeBatch([]string{tt.str, tt.str}, tt.addSpecial)
+			require.Equal(t, 2, len(results))
+			for ii, res := range results {
+				assert.Equalf(t, tt.wantIDs, res.TokenIds, "Sentence %d", ii)
+				assert.Equalf(t, tt.wantTokens, res.Tokens, "Sentence %d", ii)
+			}
+		})
 	}
 }
 

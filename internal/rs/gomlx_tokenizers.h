@@ -5,30 +5,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-typedef struct Offset {
-  uint32_t start;
-  uint32_t end;
-} Offset;
-
-typedef struct Buffer {
-  uint32_t *ids;
-  uint32_t *type_ids;
-  uint32_t *special_tokens_mask;
-  uint32_t *attention_mask;
-  char **tokens;
-  struct Offset *offsets;
-  uintptr_t len;
-} Buffer;
-
-typedef struct EncodeOptions {
-  bool add_special_tokens;
-  bool return_type_ids;
-  bool return_special_tokens_mask;
-  bool return_attention_mask;
-  bool return_offsets;
-  bool with_offsets_char_mode;
-} EncodeOptions;
-
 /**
  * TruncationParameters represents the truncation parameters
  * that can be set with "with_truncation".
@@ -54,6 +30,59 @@ typedef struct PaddingParams {
 } PaddingParams;
 
 /**
+ * Offset of the toke in the sentence.
+ * The Go library limits this to u32 -- we don't expect sentences larger than ~4GB.
+ */
+typedef struct Offset {
+  uint32_t start;
+  uint32_t end;
+} Offset;
+
+/**
+ * Buffer represents the result of an encoded sentence.
+ * Each of the fields are only filled if they were requested in the corresponding
+ * EncodeParams setting.
+ */
+typedef struct Buffer {
+  uint32_t *ids;
+  uint32_t *type_ids;
+  uint32_t *special_tokens_mask;
+  uint32_t *attention_mask;
+  char **tokens;
+  struct Offset *offsets;
+  uint32_t len;
+} Buffer;
+
+/**
+ * EncodeResult represents the result of encoding one (`encode` function)
+ * or more (`encode_batch` function) sentences.
+ *
+ * It will contain either an error as a C string, or a number of Buffer
+ * results, one per sentence encoded -- only one if using `encode` function.
+ *
+ * Once it is no longer used, free the data with `free_encode_results`.
+ */
+typedef struct EncodeResults {
+  uint32_t len;
+  struct Buffer *encoded;
+  char *error;
+} EncodeResults;
+
+/**
+ * EncodeParams specifies what information to return from the
+ * encoded sentences.
+ * It controls which fields in Buffer are set.
+ */
+typedef struct EncodeParams {
+  bool add_special_tokens;
+  bool return_type_ids;
+  bool return_special_tokens_mask;
+  bool return_attention_mask;
+  bool return_offsets;
+  bool with_offsets_char_mode;
+} EncodeParams;
+
+/**
  * This function returns a Tokenizer reference to Golang, casted as a C `void*` after reading
  * tokenizer.json to bytes.
  *
@@ -64,32 +93,11 @@ typedef struct PaddingParams {
 void *from_bytes(const uint8_t *bytes, uint32_t len);
 
 /**
- * This function is return Tokenizer(truncation mode) object to Golang from
- * after read tokenizer.json to bytes
- *
- * # Safety
- *
- */
-void *from_bytes_with_truncation(const uint8_t *bytes, uint32_t len, uint32_t max_len, uint8_t dir);
-
-/**
  * # Safety
  *
  * This function is return Tokenizer object to Golang from tokenizer.json
  */
 void *from_file(const char *config);
-
-/**
- * Encodes string using given tokenizer and EncodeOptions.
- */
-struct Buffer encode(void *tokenizer_ptr, const char *message, const struct EncodeOptions *options);
-
-/**
- * Encode a batch of strings using given tokenizer and EncodeOptions.
- */
-struct Buffer *encode_batch(void *tokenizer_ptr,
-                            const char *const *messages,
-                            const struct EncodeOptions *options);
 
 /**
  * tokenizer.Decode method.
@@ -98,37 +106,17 @@ struct Buffer *encode_batch(void *tokenizer_ptr,
 char *decode(void *tokenizer_ptr, const uint32_t *ids, uint32_t len, bool skip_special_tokens);
 
 /**
- * # Safety
- *
- * This function is return vocab size to Golang
+ * Returns the vocab size.
  */
 uint32_t vocab_size(void *ptr);
 
 /**
- * # Safety
- *
- * This function is release Tokenizer from Rust return to Golang
+ * Frees a Tokenizer allocated by Rust and returned to Golang.
  */
 void free_tokenizer(void *ptr);
 
 /**
- * # Safety
- *
- * This function is release Buffer struct from Rust return to Golang
- */
-void free_buffer(struct Buffer buf);
-
-/**
- * # Safety
- *
- * This function is release Vec<Buffer> from Rust return to Golang
- */
-void free_batch_buffer(struct Buffer *bufs);
-
-/**
- * # Safety
- *
- * This function is release C.char from Rust return to Golang
+ * Frees a `*C.char` allocated by Rust and return to Golang.
  */
 void free_string(char *ptr);
 
@@ -145,5 +133,23 @@ char *set_truncation(void *tokenizer_ptr,
  * It doesn't return anything.
  */
 void set_padding(void *tokenizer_ptr, const struct PaddingParams *params);
+
+/**
+ * Encodes string using given tokenizer and EncodeParams.
+ */
+struct EncodeResults encode(void *tokenizer_ptr, const char *message, struct EncodeParams options);
+
+/**
+ * Encode a batch of strings using given tokenizer and EncodeParams.
+ * The
+ */
+struct EncodeResults encode_batch(void *tokenizer_ptr,
+                                  const char *const *messages,
+                                  struct EncodeParams options);
+
+/**
+ * This function is release Vec<Buffer> from Rust returned to Golang by `encode_batch`.
+ */
+void free_encode_results(struct EncodeResults results);
 
 /* File generated with cbindgen from the Rust library -- don't change it directly */
