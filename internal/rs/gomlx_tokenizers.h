@@ -75,6 +75,7 @@ typedef struct EncodeResults {
  */
 typedef struct EncodeParams {
   bool add_special_tokens;
+  bool return_tokens;
   bool return_type_ids;
   bool return_special_tokens_mask;
   bool return_attention_mask;
@@ -144,6 +145,7 @@ struct EncodeResults encode(void *tokenizer_ptr, const char *message, struct Enc
  * The
  */
 struct EncodeResults encode_batch(void *tokenizer_ptr,
+                                  uint32_t num_messages,
                                   const char *const *messages,
                                   struct EncodeParams options);
 

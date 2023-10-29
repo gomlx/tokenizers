@@ -3,6 +3,7 @@ use std::ffi::CStr;
 use std::ptr::null_mut;
 use tokenizers::Encoding;
 use tokenizers::tokenizer::Tokenizer;
+use std::error::Error;
 
 /// EncodeParams specifies what information to return from the
 /// encoded sentences.
@@ -10,6 +11,7 @@ use tokenizers::tokenizer::Tokenizer;
 #[repr(C)]
 pub struct EncodeParams {
     add_special_tokens: bool,
+    return_tokens: bool,
     return_type_ids: bool,
     return_special_tokens_mask: bool,
     return_attention_mask: bool,
@@ -53,30 +55,37 @@ pub struct Offset {
     end: u32,
 }
 
-fn encode_process(encoding: Encoding, options: &EncodeParams) -> Buffer {
+fn encode_process(encoding: Encoding, options: &EncodeParams) -> Result<Buffer, Box<dyn Error>> {
     // ids, tokens
     let mut vec_ids = encoding.get_ids().to_vec();
-    let mut vec_tokens = encoding
-        .get_tokens()
-        .iter()
-        .cloned()
-        .map(|s| std::ffi::CString::new(s).unwrap().into_raw())
-        .collect::<Vec<_>>();
     vec_ids.shrink_to_fit();
-    vec_tokens.shrink_to_fit();
     let ids = vec_ids.as_mut_ptr();
-    let tokens = vec_tokens.as_mut_ptr();
     let len = vec_ids.len();
     std::mem::forget(vec_ids);
-    std::mem::forget(vec_tokens);
+
+    let tokens: *mut *mut libc::c_char;
+    if options.return_tokens {
+        let tokens_string = encoding.get_tokens();
+        let mut vec_tokens: Vec<*mut libc::c_char> = Vec::with_capacity(tokens_string.len());
+        for token in tokens_string {
+            vec_tokens.push(std::ffi::CString::new(token.as_bytes())?.into_raw());
+        }
+        vec_tokens.shrink_to_fit();
+        tokens = vec_tokens.as_mut_ptr();
+        std::mem::forget(vec_tokens);
+    } else {
+        tokens = null_mut();
+    }
 
     // type_ids
-    let mut type_ids: *mut u32 = null_mut();
+    let type_ids: *mut u32;
     if options.return_type_ids {
         let mut vec_type_ids = encoding.get_type_ids().to_vec();
         vec_type_ids.shrink_to_fit();
         type_ids = vec_type_ids.as_mut_ptr();
         std::mem::forget(vec_type_ids);
+    } else {
+        type_ids = null_mut();
     }
 
     // special_tokens_mask
@@ -113,7 +122,7 @@ fn encode_process(encoding: Encoding, options: &EncodeParams) -> Buffer {
         std::mem::forget(vec_offsets);
     }
 
-    Buffer {
+    Ok(Buffer {
         ids,
         type_ids,
         special_tokens_mask,
@@ -121,8 +130,79 @@ fn encode_process(encoding: Encoding, options: &EncodeParams) -> Buffer {
         tokens,
         offsets,
         len: (len as u32),
+    })
+}
+
+// result_to_encode_results converts errors in a Result<EncodedResult, Error> to
+// a new `EncodeResults` struct, with the error converted to C-string.
+fn result_to_encode_results(r: Result<EncodeResults, Box<dyn Error>>) -> EncodeResults {
+    match r {
+        Ok(encode_results) => {
+            encode_results
+        }
+        Err(err) => {
+            EncodeResults{
+                len: 0,
+                encoded: std::ptr::null_mut(),
+                error: std::ffi::CString::new(err.to_string())
+                    .unwrap().into_raw(),
+            }
+        }
     }
 }
+
+fn err<S: AsRef<str>>(message: S) -> Box<dyn Error> {
+    Box::new(std::io::Error::new(std::io::ErrorKind::Other, message.as_ref()))
+}
+// convert_to_tokenizer_ref given a C `void *`.
+fn convert_to_tokenizer_ref<'a>(tokenizer_ptr: *mut libc::c_void) -> Result<&'a Tokenizer, Box<dyn Error>> {
+    unsafe {
+        if tokenizer_ptr.cast::<Tokenizer>().as_mut().is_none() {
+            return Err(err("tokenizer passed is null"));
+        }
+        match tokenizer_ptr
+            .cast::<Tokenizer>()
+            .as_mut() {
+            Some(t) => Ok(t),
+            None => Err(err("invalid reference to Tokenizer"))
+        }
+    }
+}
+
+fn encode_impl(tokenizer_ptr: *mut libc::c_void,
+                   message: *const libc::c_char,
+                   options: EncodeParams,
+               ) -> Result<EncodeResults, Box<dyn Error>> {
+    let tokenizer: &Tokenizer = convert_to_tokenizer_ref(tokenizer_ptr)?;
+    let message_cstr = unsafe { CStr::from_ptr(message) };
+    let message = message_cstr.to_str().unwrap();
+
+    let encoding_res = if options.with_offsets_char_mode {
+        tokenizer.encode_char_offsets(message, options.add_special_tokens)
+    } else {
+        tokenizer.encode(message, options.add_special_tokens)
+    };
+    let encoding: Encoding;
+    match encoding_res {
+        Ok(e) => encoding = e,
+        Err(error) => return Err(err(format!("encoding failed: {}", error.to_string()))),
+    }
+
+    // Encode it.
+    let buffer = encode_process(encoding, &options)?;
+
+    // Package one Buffer into EncodeResults.
+    let mut vec_buf: Vec<Buffer> = Vec::with_capacity(1);
+    vec_buf.push(buffer);
+    let vec_ptr = vec_buf.as_mut_ptr();
+    std::mem::forget(vec_buf);
+    Ok(EncodeResults{
+        len: 1,
+        encoded: vec_ptr,
+        error: null_mut(),
+    })
+}
+
 
 /// Encodes string using given tokenizer and EncodeParams.
 #[no_mangle]
@@ -131,39 +211,8 @@ pub unsafe extern "C" fn encode(
     message: *const libc::c_char,
     options: EncodeParams,
 ) -> EncodeResults {
-    let tokenizer: &Tokenizer;
-    unsafe {
-        tokenizer = tokenizer_ptr
-            .cast::<Tokenizer>()
-            .as_ref()
-            .expect("failed to cast tokenizer");
-    }
-    let message_cstr = unsafe { CStr::from_ptr(message) };
-    let message = message_cstr.to_str().unwrap();
-
-    let encoding = if options.with_offsets_char_mode {
-        tokenizer
-            .encode_char_offsets(message, options.add_special_tokens)
-            .expect("failed to encode input")
-    } else {
-        tokenizer
-            .encode(message, options.add_special_tokens)
-            .expect("failed to encode input")
-    };
-
-    // Encode it.
-    let buffer = encode_process(encoding, &options);
-
-    // Package one Buffer into EncodeResults.
-    let mut vec_buf: Vec<Buffer> = Vec::with_capacity(1);
-    vec_buf.push(buffer);
-    let vec_ptr = vec_buf.as_mut_ptr();
-    std::mem::forget(vec_buf);
-    EncodeResults{
-        len: 1,
-        encoded: vec_ptr,
-        error: null_mut(),
-    }
+    result_to_encode_results(
+        encode_impl(tokenizer_ptr, message, options))
 }
 
 /// Encode a batch of strings using given tokenizer and EncodeParams.
@@ -171,43 +220,47 @@ pub unsafe extern "C" fn encode(
 #[no_mangle]
 pub unsafe extern "C" fn encode_batch(
     tokenizer_ptr: *mut libc::c_void,
+    num_messages: u32,
     messages: *const *const libc::c_char,
     options: EncodeParams,
 ) -> EncodeResults {
-    let tokenizer: &Tokenizer;
-    let mut index = 0;
-    let mut encode_messages: Vec<String> = Vec::new();
+    result_to_encode_results(
+        encode_batch_impl(tokenizer_ptr, num_messages, messages, options))
+}
 
+fn encode_batch_impl(
+    tokenizer_ptr: *mut libc::c_void,
+    num_messages: u32,
+    messages: *const *const libc::c_char,
+    options: EncodeParams,
+) -> Result<EncodeResults, Box<dyn Error>> {
+    let tokenizer: &Tokenizer = convert_to_tokenizer_ref(tokenizer_ptr)?;
+    let mut encode_messages: Vec<String> = Vec::with_capacity(num_messages as usize);
     unsafe {
-        tokenizer = tokenizer_ptr
-            .cast::<Tokenizer>()
-            .as_ref()
-            .expect("failed to cast tokenizer");
-        // Iterate through the C string pointers until a NULL pointer is encountered
-        while !(*messages.offset(index)).is_null() {
-            let cstr_ptr = *messages.offset(index);
+        for index in 0..num_messages {
+            let cstr_ptr = *messages.offset(index as isize);
             let rust_string = CStr::from_ptr(cstr_ptr).to_string_lossy().into_owned();
             encode_messages.push(rust_string);
-            index += 1;
         }
     }
-
-    let encoding = if options.with_offsets_char_mode {
+    let encoding_res = if options.with_offsets_char_mode {
         tokenizer
             .encode_batch_char_offsets(encode_messages, options.add_special_tokens)
-            .expect("failed to encode input")
     } else {
         tokenizer
             .encode_batch(encode_messages, options.add_special_tokens)
-            .expect("failed to encode input")
     };
+    let encoding: Vec<Encoding>;
+    match encoding_res {
+        Ok(e) => encoding = e,
+        Err(error) => return Err(err(format!("encoding failed: {}", error.to_string()))),
+    }
 
     // batch process
-    let mut vec_buffers: Vec<Buffer> = encoding
-        .iter()
-        .cloned()
-        .map(|s| encode_process(s, &options))
-        .collect::<Vec<Buffer>>();
+    let mut vec_buffers: Vec<Buffer> = Vec::with_capacity(num_messages as usize);
+    for enc in encoding {
+        vec_buffers.push(encode_process(enc, &options)?);
+    }
     vec_buffers.shrink_to_fit();
     let encode_results = EncodeResults{
         len: vec_buffers.len() as u32,
@@ -215,7 +268,7 @@ pub unsafe extern "C" fn encode_batch(
         error: null_mut(),
     };
     std::mem::forget(vec_buffers);
-    encode_results
+    Ok(encode_results)
 }
 
 /// This function is release a Buffer struct from Rust returned to Golang by `encode`.
