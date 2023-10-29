@@ -53,9 +53,15 @@ func TestEmbeddingConfig(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			encodeRes := tk.Encode(tt.str, tt.addSpecial)
+			encodeRes, err := tk.Encode(tt.str, tt.addSpecial, rs.WithTokens())
+			require.NoError(t, err)
 			assert.Equal(t, tt.wantIDs, encodeRes.TokenIds)
 			assert.Equal(t, tt.wantTokens, encodeRes.Tokens)
+
+			encodeRes, err = tk.Encode(tt.str, tt.addSpecial)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantIDs, encodeRes.TokenIds)
+			assert.Empty(t, encodeRes.Tokens)
 		})
 	}
 }
@@ -88,17 +94,22 @@ func TestEncode(t *testing.T) {
 		{
 			name:       "empty string",
 			str:        "",
+			wantIDs:    []uint32{},
+			wantTokens: []string{},
 			addSpecial: false,
 		},
 		{
 			name:       "empty string with special tokens",
 			str:        "",
-			addSpecial: false,
+			wantIDs:    []uint32{101, 102},
+			wantTokens: []string{"[CLS]", "[SEP]"},
+			addSpecial: true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			encodeRes := tk.Encode(tt.str, tt.addSpecial)
+			encodeRes, err := tk.Encode(tt.str, tt.addSpecial, rs.WithTokens())
+			require.NoError(t, err)
 			assert.Equal(t, tt.wantIDs, encodeRes.TokenIds)
 			assert.Equal(t, tt.wantTokens, encodeRes.Tokens)
 		})
@@ -132,35 +143,40 @@ func TestEncodeOptions(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			encoding := tk.Encode(tt.str, tt.addSpecial)
+			encoding, err := tk.Encode(tt.str, tt.addSpecial, rs.WithTokens())
+			require.NoError(t, err)
 			assert.Equal(t, tt.wantIDs, encoding.TokenIds, "wrong ids")
 			assert.Equal(t, []uint32(nil), encoding.TypeIds, "wrong type ids")
 			assert.Equal(t, tt.wantTokens, encoding.Tokens, "wrong tokens")
 			assert.Equal(t, []uint32(nil), encoding.SpecialTokensMask, "wrong special tokens mask")
 			assert.Equal(t, []uint32(nil), encoding.AttentionMask, "wrong attention mask")
 
-			encoding = tk.Encode(tt.str, tt.addSpecial, rs.WithReturnTypeIds())
+			encoding, err = tk.Encode(tt.str, tt.addSpecial, rs.WithTokens(), rs.WithReturnTypeIds())
+			require.NoError(t, err)
 			assert.Equal(t, tt.wantIDs, encoding.TokenIds, "wrong ids")
 			assert.Equal(t, tt.wantTypeIDs, encoding.TypeIds, "wrong type ids")
 			assert.Equal(t, tt.wantTokens, encoding.Tokens, "wrong tokens")
 			assert.Equal(t, []uint32(nil), encoding.SpecialTokensMask, "wrong special tokens mask")
 			assert.Equal(t, []uint32(nil), encoding.AttentionMask, "wrong attention mask")
 
-			encoding = tk.Encode(tt.str, tt.addSpecial, rs.WithReturnSpecialTokensMask())
+			encoding, err = tk.Encode(tt.str, tt.addSpecial, rs.WithTokens(), rs.WithReturnSpecialTokensMask())
+			require.NoError(t, err)
 			assert.Equal(t, tt.wantIDs, encoding.TokenIds, "wrong ids")
 			assert.Equal(t, []uint32(nil), encoding.TypeIds, "wrong type ids")
 			assert.Equal(t, tt.wantTokens, encoding.Tokens, "wrong tokens")
 			assert.Equal(t, tt.wantSpecialTokensMask, encoding.SpecialTokensMask, "wrong special tokens mask")
 			assert.Equal(t, []uint32(nil), encoding.AttentionMask, "wrong attention mask")
 
-			encoding = tk.Encode(tt.str, tt.addSpecial, rs.WithReturnAttentionMask())
+			encoding, err = tk.Encode(tt.str, tt.addSpecial, rs.WithReturnAttentionMask())
+			require.NoError(t, err)
 			assert.Equal(t, tt.wantIDs, encoding.TokenIds, "wrong ids")
 			assert.Equal(t, []uint32(nil), encoding.TypeIds, "wrong type ids")
-			assert.Equal(t, tt.wantTokens, encoding.Tokens, "wrong tokens")
+			assert.Equal(t, []string(nil), encoding.Tokens, "no tokens requested, should be empty")
 			assert.Equal(t, []uint32(nil), encoding.SpecialTokensMask, "wrong special tokens mask")
 			assert.Equal(t, tt.wantAttentionMask, encoding.AttentionMask, "wrong attention mask")
 
-			encoding = tk.Encode(tt.str, tt.addSpecial, rs.WithReturnAll(false))
+			encoding, err = tk.Encode(tt.str, tt.addSpecial, rs.WithTokens(), rs.WithReturnAll(false))
+			require.NoError(t, err)
 			assert.Equal(t, tt.wantIDs, encoding.TokenIds, "wrong ids")
 			assert.Equal(t, tt.wantTypeIDs, encoding.TypeIds, "wrong type ids")
 			assert.Equal(t, tt.wantTokens, encoding.Tokens, "wrong tokens")
@@ -175,7 +191,8 @@ func TestEncodeOffsets(t *testing.T) {
 	require.NoError(t, err)
 	defer tk.Close()
 
-	encodeRes := tk.Encode("brown fox jumps over the lazy dog", false, rs.WithReturnOffsets())
+	encodeRes, err := tk.Encode("brown fox jumps over the lazy dog", false, rs.WithReturnOffsets())
+	require.NoError(t, err)
 	expected := []rs.Offset{
 		{Start: 0, End: 5},
 		{Start: 6, End: 9},
@@ -187,7 +204,8 @@ func TestEncodeOffsets(t *testing.T) {
 	}
 	assert.Equal(t, encodeRes.Offsets, expected)
 
-	encodeResV1 := tk.Encode("brown fox jumps over the lazy dog", false, rs.WithReturnCharModeOffsets())
+	encodeResV1, err := tk.Encode("brown fox jumps over the lazy dog", false, rs.WithReturnCharModeOffsets())
+	require.NoError(t, err)
 	expectedV1 := []rs.Offset{
 		{Start: 0, End: 5},
 		{Start: 6, End: 9},
@@ -230,7 +248,8 @@ func TestEncodeBatch(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			results := tk.EncodeBatch([]string{tt.str, tt.str}, tt.addSpecial)
+			results, err := tk.EncodeBatch([]string{tt.str, tt.str}, tt.addSpecial, rs.WithTokens())
+			require.NoError(t, err)
 			require.Equal(t, 2, len(results))
 			for ii, res := range results {
 				assert.Equalf(t, tt.wantIDs, res.TokenIds, "Sentence %d", ii)
@@ -296,8 +315,10 @@ func TestEncodeWithTruncation(t *testing.T) {
 			err = tk.SetTruncation(uint8(tt.dir), uint32(tt.maxLen), 0, 0)
 			require.NoError(t, err)
 
-			tk.Encode(tt.str, tt.addSpecial)
-			encodeRes := tk.Encode(tt.str, tt.addSpecial)
+			_, err = tk.Encode(tt.str, tt.addSpecial)
+			require.NoError(t, err)
+			encodeRes, err := tk.Encode(tt.str, tt.addSpecial, rs.WithTokens())
+			require.NoError(t, err)
 			assert.Equal(t, tt.wantIDs, encodeRes.TokenIds)
 			assert.Equal(t, tt.wantTokens, encodeRes.Tokens)
 		})
@@ -350,7 +371,8 @@ func TestEncodeWithPadding(t *testing.T) {
 			tk.SetPadding(tt.padLen, tt.dir, tt.padToMultipleOf, tt.padId, 0, tt.padToken)
 
 			tk.Encode(tt.str, tt.addSpecial)
-			encodeRes := tk.Encode(tt.str, tt.addSpecial)
+			encodeRes, err := tk.Encode(tt.str, tt.addSpecial, rs.WithTokens())
+			require.NoError(t, err)
 			assert.Equal(t, tt.wantIDs, encodeRes.TokenIds)
 			assert.Equal(t, tt.wantTokens, encodeRes.Tokens)
 		})
@@ -381,7 +403,8 @@ func TestEncodeWithPaddingBert(t *testing.T) {
 			require.NoError(t, err)
 			defer tk.Close()
 
-			encodeRes := tk.Encode(tt.str, tt.addSpecial, rs.WithReturnAll(false))
+			encodeRes, err := tk.Encode(tt.str, tt.addSpecial, rs.WithReturnAll(false))
+			require.NoError(t, err)
 			assert.Equal(t, tt.wantIDs, encodeRes.TokenIds)
 			assert.Equal(t, tt.wantTokens, encodeRes.Tokens)
 		})
@@ -451,7 +474,10 @@ func BenchmarkEncodeNTimes(b *testing.B) {
 	expected := []uint32{2829, 4419, 14523, 2058, 1996, 13971, 3899}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		encodeRes := tk.Encode("brown fox jumps over the lazy dog", false)
+		encodeRes, err := tk.Encode("brown fox jumps over the lazy dog", false)
+		if err != nil {
+			require.NoError(b, err)
+		}
 		assert.Equal(b, expected, encodeRes.TokenIds)
 	}
 }
@@ -462,7 +488,10 @@ func BenchmarkEncodeWithOptionNTimes(b *testing.B) {
 	defer tk.Close()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = tk.Encode("brown fox jumps over the lazy dog", false, rs.WithReturnAll(false))
+		_, err = tk.Encode("brown fox jumps over the lazy dog", false, rs.WithReturnAll(false))
+		if err != nil {
+			require.NoError(b, err)
+		}
 	}
 }
 

@@ -318,7 +318,6 @@ pub unsafe extern "C" fn free_encode_results(results: EncodeResults) {
     if results.len > 0 {
         unsafe {
             let vec_buffers = Vec::from_raw_parts(results.encoded, results.len as usize, results.len as usize);
-            println!("Length of buffers: {}", vec_buffers.len());
             for buf in vec_buffers {
                 free_buffer(buf);
             }
