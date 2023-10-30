@@ -151,11 +151,13 @@ fn result_to_encode_results(r: Result<EncodeResults, Box<dyn Error>>) -> EncodeR
     }
 }
 
+// Create an error from the given message.
 fn err<S: AsRef<str>>(message: S) -> Box<dyn Error> {
     Box::new(std::io::Error::new(std::io::ErrorKind::Other, message.as_ref()))
 }
+
 // convert_to_tokenizer_ref given a C `void *`.
-fn convert_to_tokenizer_ref<'a>(tokenizer_ptr: *mut libc::c_void) -> Result<&'a Tokenizer, Box<dyn Error>> {
+pub fn convert_to_tokenizer_ref<'a>(tokenizer_ptr: *mut libc::c_void) -> Result<&'a Tokenizer, Box<dyn Error>> {
     unsafe {
         if tokenizer_ptr.cast::<Tokenizer>().as_mut().is_none() {
             return Err(err("tokenizer passed is null"));

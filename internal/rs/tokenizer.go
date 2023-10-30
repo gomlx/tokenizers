@@ -23,6 +23,7 @@ import "C"
 import (
 	"github.com/pkg/errors"
 	"io"
+	"os"
 	"runtime"
 	"unsafe"
 )
@@ -118,22 +119,25 @@ const (
 var _ io.Closer = (*Tokenizer)(nil)
 
 func FromBytes(data []byte) (*Tokenizer, error) {
-	tokenizer := C.from_bytes((*C.uchar)(unsafe.Pointer(&data[0])), C.uint(len(data)))
-
-	return &Tokenizer{tokenizer: tokenizer}, nil
-}
-
-func FromFile(path string) (*Tokenizer, error) {
-	cPath := C.CString(path)
-	defer C.free(unsafe.Pointer(cPath))
-	tokenizer, err := C.from_file(cPath)
+	pointerOrError := C.from_bytes((*C.uchar)(unsafe.Pointer(&data[0])), C.uint(len(data)))
+	err := errorFromCStr(pointerOrError.error)
 	if err != nil {
 		return nil, err
 	}
-
-	return &Tokenizer{tokenizer: tokenizer}, nil
+	return &Tokenizer{tokenizer: pointerOrError.value}, nil
 }
 
+func FromFile(path string) (*Tokenizer, error) {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return nil, errors.Wrap(err, "can't read tokenizer file:")
+	}
+	return FromBytes(contents)
+}
+
+// errorFromCStr checks whether there is an error string and creates one accordingly.
+// It frees cStr after converting it to an error.
+// It can be used with `PointerOrError.error`.
 func errorFromCStr(cStr *C.char) error {
 	if cStr == nil {
 		return nil
@@ -146,6 +150,8 @@ func errorFromCStr(cStr *C.char) error {
 // SetTruncation changes the tokenizer truncation.
 // - direction: // 0 -> Left (*); 1 -> Right
 // - 0 -> LongestFirst (*), 1 -> OnlyFirst, 2 -> OnlySecond,
+//
+// It may return an error if `stride` is too high relative to `maxLength` and the `post_processor.added_tokens()`.
 func (t *Tokenizer) SetTruncation(
 	direction uint8, maxLength uint32, strategy uint8, stride uint32) error {
 	params := &C.TruncationParams{
@@ -164,6 +170,22 @@ func (t *Tokenizer) SetNoTruncation() error {
 	defer runtime.KeepAlive(t)
 	return errorFromCStr(
 		C.set_truncation(t.tokenizer, nil))
+}
+
+// GetTruncation returns the current truncation parameters of the Tokenizer.
+// If there are no parameters set, `isSet` is false, and the other values should be ignored.
+// Otherwise, `isSet` is true, and the other values are returned appropriately.
+func (t *Tokenizer) GetTruncation() (isSet bool, direction uint8, maxLength uint32, strategy uint8, stride uint32) {
+	params := &C.TruncationParams{}
+	isSet = bool(C.get_truncation(t.tokenizer, params))
+	runtime.KeepAlive(t)
+	if isSet {
+		direction = uint8(params.direction)
+		maxLength = uint32(params.max_length)
+		strategy = uint8(params.strategy)
+		stride = uint32(params.stride)
+	}
+	return
 }
 
 // SetPadding changes the tokenizer padding configuration.
@@ -194,6 +216,28 @@ func (t *Tokenizer) SetPadding(
 func (t *Tokenizer) SetNoPadding() {
 	defer runtime.KeepAlive(t)
 	C.set_padding(t.tokenizer, nil)
+}
+
+// GetPadding returns the current padding parameters of the Tokenizer.
+// If there are no parameters set, `isSet` is false, and the other values should be ignored.
+// Otherwise, `isSet` is true, and the other values are returned appropriately.
+func (t *Tokenizer) GetPadding() (isSet bool, strategy uint32, direction uint8, padToMultipleOf, padId, padTypeId uint32, padToken string) {
+	params := &C.PaddingParams{}
+	isSet = bool(C.get_padding(t.tokenizer, params))
+	runtime.KeepAlive(t)
+	if isSet {
+		strategy = uint32(params.strategy)
+		direction = uint8(params.direction)
+		padToMultipleOf = uint32(params.pad_to_multiple_of)
+		padId = uint32(params.pad_id)
+		padTypeId = uint32(params.pad_type_id)
+		if params.pad_token != nil {
+			padToken = C.GoString(params.pad_token)
+			C.free_string(params.pad_token)
+			params.pad_token = nil
+		}
+	}
+	return
 }
 
 func (t *Tokenizer) Close() error {

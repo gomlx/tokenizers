@@ -1,5 +1,6 @@
 use std::ffi::CStr;
 use tokenizers::tokenizer::Tokenizer;
+use crate::encode::convert_to_tokenizer_ref;
 
 /// TruncationParameters represents the truncation parameters
 /// that can be set with "with_truncation".
@@ -59,6 +60,34 @@ pub unsafe extern "C" fn set_truncation(
     std::ptr::null_mut()
 }
 
+/// get_truncation gets the current Tokenizer's truncation parameters.
+///
+/// If there are truncation parameters configured in the Tokenizer, the values are read into the `params` passed,
+/// and it returns true.
+///
+/// If there are no truncation values configured, it returns false.
+#[no_mangle]
+pub unsafe extern "C" fn get_truncation(
+    tokenizer_ptr: *mut libc::c_void, params: *mut TruncationParams) -> bool {
+    let tokenizer: &Tokenizer = convert_to_tokenizer_ref(tokenizer_ptr).expect("Invalid Tokenizer object!?");
+    match tokenizer.get_truncation() {
+        Some(p) => {
+            (*params).max_length = p.max_length as u32;
+            (*params).stride = p.stride as u32;
+            (*params).direction = match p.direction {
+                tokenizers::tokenizer::TruncationDirection::Left => 0,
+                tokenizers::tokenizer::TruncationDirection::Right => 1,
+            };
+            (*params).strategy = match p.strategy {
+                tokenizers::tokenizer::TruncationStrategy::LongestFirst => 0,
+                tokenizers::tokenizer::TruncationStrategy::OnlyFirst => 1,
+                tokenizers::tokenizer::TruncationStrategy::OnlySecond => 2,
+            };
+            return true;
+        }
+        None => return false,
+    }
+}
 
 /// PaddingParams represents the padding parameters: it maps to the values in
 /// tokenizers::tokenizer::PaddingParams.
@@ -119,3 +148,39 @@ pub unsafe extern "C" fn set_padding(
             pad_token: pad_token,
         }));
 }
+
+
+/// get_padding gets the current Tokenizer's padding parameters.
+///
+/// If there are padding parameters configured in the Tokenizer, the values are read into the `params` passed,
+/// and it returns true. The `params.pad_token` ownership is transferred to the caller, who must free it
+/// after use (see `free_string()`).
+///
+/// If there are no truncation values configured, it returns false.
+#[no_mangle]
+pub unsafe extern "C" fn get_padding(
+    tokenizer_ptr: *mut libc::c_void, params: *mut PaddingParams) -> bool {
+    let tokenizer: &Tokenizer = convert_to_tokenizer_ref(tokenizer_ptr).expect("Invalid Tokenizer object!?");
+    match tokenizer.get_padding() {
+        Some(p) => {
+            (*params).pad_id = p.pad_id as u32;
+            (*params).pad_type_id = p.pad_type_id as u32;
+            (*params).pad_to_multiple_of = match p.pad_to_multiple_of {
+                Some(v) => v as u32,
+                None => 0,
+            };
+            (*params).direction = match p.direction {
+                tokenizers::tokenizer::PaddingDirection::Left => 0,
+                tokenizers::tokenizer::PaddingDirection::Right => 1,
+            };
+            (*params).strategy = match p.strategy {
+                tokenizers::tokenizer::PaddingStrategy::BatchLongest => 0,
+                tokenizers::tokenizer::PaddingStrategy::Fixed(value) => value as u32,
+            };
+            (*params).pad_token = std::ffi::CString::new(p.pad_token.as_bytes()).unwrap().into_raw();
+            return true;
+        }
+        None => return false,
+    }
+}
+

@@ -24,10 +24,20 @@ func TestInvalidConfigPath(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestInvalidBytes(t *testing.T) {
+	contents := "I_am_not_json"
+	tk, err := rs.FromBytes([]byte(contents))
+	assert.Error(t, err)
+	if err == nil {
+		err = tk.Close()
+		require.NoError(t, err)
+	}
+}
+
 func TestEmbeddingConfig(t *testing.T) {
 	tk, err := rs.FromBytes(embeddedBytes)
 	require.NoError(t, err)
-	defer tk.Close()
+	defer func() { _ = tk.Close() }()
 
 	tests := []struct {
 		name       string
@@ -69,7 +79,7 @@ func TestEmbeddingConfig(t *testing.T) {
 func TestEncode(t *testing.T) {
 	tk, err := rs.FromFile(bertJson)
 	require.NoError(t, err)
-	defer tk.Close()
+	defer func() { _ = tk.Close() }()
 	tests := []struct {
 		name       string
 		str        string
@@ -119,7 +129,7 @@ func TestEncode(t *testing.T) {
 func TestEncodeOptions(t *testing.T) {
 	tk, err := rs.FromFile(bertJson)
 	require.NoError(t, err)
-	defer tk.Close()
+	defer func() { _ = tk.Close() }()
 	tests := []struct {
 		name                  string
 		str                   string
@@ -189,7 +199,7 @@ func TestEncodeOptions(t *testing.T) {
 func TestEncodeOffsets(t *testing.T) {
 	tk, err := rs.FromFile(bertJson)
 	require.NoError(t, err)
-	defer tk.Close()
+	defer func() { _ = tk.Close() }()
 
 	encodeRes, err := tk.Encode("brown fox jumps over the lazy dog", false, rs.WithReturnOffsets())
 	require.NoError(t, err)
@@ -221,7 +231,7 @@ func TestEncodeOffsets(t *testing.T) {
 func TestEncodeBatch(t *testing.T) {
 	tk, err := rs.FromFile(bertJson)
 	require.NoError(t, err)
-	defer tk.Close()
+	defer func() { _ = tk.Close() }()
 
 	tests := []struct {
 		name       string
@@ -312,8 +322,18 @@ func TestEncodeWithTruncation(t *testing.T) {
 			require.NoError(t, err)
 			defer func() { _ = tk.Close() }()
 
+			isSet, _, _, _, _ := tk.GetTruncation()
+			assert.False(t, isSet)
+
 			err = tk.SetTruncation(uint8(tt.dir), uint32(tt.maxLen), 0, 0)
 			require.NoError(t, err)
+
+			isSet, direction, maxLength, strategy, stride := tk.GetTruncation()
+			assert.True(t, isSet)
+			assert.Equal(t, uint8(tt.dir), direction)
+			assert.Equal(t, uint32(tt.maxLen), maxLength)
+			assert.Equal(t, uint8(0), strategy)
+			assert.Equal(t, uint32(0), stride)
 
 			_, err = tk.Encode(tt.str, tt.addSpecial)
 			require.NoError(t, err)
@@ -321,6 +341,13 @@ func TestEncodeWithTruncation(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantIDs, encodeRes.TokenIds)
 			assert.Equal(t, tt.wantTokens, encodeRes.Tokens)
+
+			// Checks reset of truncation.
+			err = tk.SetNoTruncation()
+			require.NoError(t, err)
+			isSet, _, _, _, _ = tk.GetTruncation()
+			assert.False(t, isSet)
+
 		})
 	}
 }
@@ -367,14 +394,30 @@ func TestEncodeWithPadding(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tk, err := rs.FromBytes(embeddedBytes)
 			require.NoError(t, err)
+			isSet, _, _, _, _, _, _ := tk.GetPadding()
+			assert.False(t, isSet)
+
 			defer func() { _ = tk.Close() }()
 			tk.SetPadding(tt.padLen, tt.dir, tt.padToMultipleOf, tt.padId, 0, tt.padToken)
+			isSet, strategy, direction, padToMultipleOf, padId, padTypeId, padToken := tk.GetPadding()
+			assert.Equal(t, tt.padLen, strategy)
+			assert.Equal(t, tt.dir, direction)
+			assert.Equal(t, tt.padToMultipleOf, padToMultipleOf)
+			assert.Equal(t, tt.padId, padId)
+			assert.Equal(t, uint32(0), padTypeId)
+			assert.Equal(t, tt.padToken, padToken)
 
-			tk.Encode(tt.str, tt.addSpecial)
+			_, err = tk.Encode(tt.str, tt.addSpecial)
+			require.NoError(t, err)
 			encodeRes, err := tk.Encode(tt.str, tt.addSpecial, rs.WithTokens())
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantIDs, encodeRes.TokenIds)
 			assert.Equal(t, tt.wantTokens, encodeRes.Tokens)
+
+			// Checks reset of padding.
+			tk.SetNoPadding()
+			isSet, _, _, _, _, _, _ = tk.GetPadding()
+			assert.False(t, isSet)
 		})
 	}
 }
@@ -401,7 +444,7 @@ func TestEncodeWithPaddingBert(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tk, err := rs.FromFile(bertPaddingJson) // Padding pre-configured in Json file.
 			require.NoError(t, err)
-			defer tk.Close()
+			defer func() { _ = tk.Close() }()
 
 			encodeRes, err := tk.Encode(tt.str, tt.addSpecial, rs.WithReturnAll(false))
 			require.NoError(t, err)
@@ -414,7 +457,7 @@ func TestEncodeWithPaddingBert(t *testing.T) {
 func TestDecode(t *testing.T) {
 	tk, err := rs.FromFile(bertJson)
 	require.NoError(t, err)
-	defer tk.Close()
+	defer func() { _ = tk.Close() }()
 	tests := []struct {
 		name        string
 		tokens      []uint32
@@ -463,14 +506,14 @@ func TestDecode(t *testing.T) {
 func TestVocabSize(t *testing.T) {
 	tk, err := rs.FromFile(bertJson)
 	require.NoError(t, err)
-	defer tk.Close()
+	defer func() { _ = tk.Close() }()
 	assert.Equal(t, uint32(30522), tk.VocabSize())
 }
 
 func BenchmarkEncodeNTimes(b *testing.B) {
 	tk, err := rs.FromFile(bertJson)
 	require.NoError(b, err)
-	defer tk.Close()
+	defer func() { _ = tk.Close() }()
 	expected := []uint32{2829, 4419, 14523, 2058, 1996, 13971, 3899}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -485,7 +528,7 @@ func BenchmarkEncodeNTimes(b *testing.B) {
 func BenchmarkEncodeWithOptionNTimes(b *testing.B) {
 	tk, err := rs.FromFile(bertJson)
 	require.NoError(b, err)
-	defer tk.Close()
+	defer func() { _ = tk.Close() }()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, err = tk.Encode("brown fox jumps over the lazy dog", false, rs.WithReturnAll(false))
@@ -498,7 +541,7 @@ func BenchmarkEncodeWithOptionNTimes(b *testing.B) {
 func BenchmarkDecodeNTimes(b *testing.B) {
 	tk, err := rs.FromFile(bertJson)
 	require.NoError(b, err)
-	defer tk.Close()
+	defer func() { _ = tk.Close() }()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		str := tk.Decode([]uint32{2829, 4419, 14523, 2058, 1996, 13971, 3899}, true)

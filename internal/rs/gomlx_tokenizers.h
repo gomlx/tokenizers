@@ -6,6 +6,21 @@
 #include <stdlib.h>
 
 /**
+ * PointerOrError returns either a `void *` pointer or an error.
+ * It can be used by functions interfacing with Rust from other languages (using the C binding).
+ *
+ * Either `value` or `error` will be defined. The `value` underlying type is defined by the function
+ * returning a `PointerOrError`.
+ *
+ * Ownership of `value` should be documented by the function returning it.
+ * Ownership of `error` is transferred back to the caller.
+ */
+typedef struct PointerOrError {
+  void *value;
+  char *error;
+} PointerOrError;
+
+/**
  * TruncationParameters represents the truncation parameters
  * that can be set with "with_truncation".
  */
@@ -84,14 +99,18 @@ typedef struct EncodeParams {
 } EncodeParams;
 
 /**
- * This function returns a Tokenizer reference to Golang, casted as a C `void*` after reading
- * tokenizer.json to bytes.
+ * This function returns a Tokenizer reference to Golang (casted as a C `void*` in the `value` field) or
+ * an error.
+ *
+ * The parameter `bytes` should be the json contents for a `tokenizer.json` file, with its definitions (symbols,
+ * truncation parameters, etc.)
  *
  * # Safety
  *
  * The caller has ownership of `bytes` and of the returned `Tokenizer`.
  */
-void *from_bytes(const uint8_t *bytes, uint32_t len);
+struct PointerOrError from_bytes(const uint8_t *bytes,
+                                 uint32_t len);
 
 /**
  * # Safety
@@ -130,10 +149,33 @@ char *set_truncation(void *tokenizer_ptr,
                      const struct TruncationParams *params);
 
 /**
+ * get_truncation gets the current Tokenizer's truncation parameters.
+ *
+ * If there are truncation parameters configured in the Tokenizer, the values are read into the `params` passed,
+ * and it returns true.
+ *
+ * If there are no truncation values configured, it returns false.
+ */
+bool get_truncation(void *tokenizer_ptr,
+                    struct TruncationParams *params);
+
+/**
  * set_padding modifies the tokenizer with the given padding parameters.
  * It doesn't return anything.
  */
 void set_padding(void *tokenizer_ptr, const struct PaddingParams *params);
+
+/**
+ * get_padding gets the current Tokenizer's padding parameters.
+ *
+ * If there are padding parameters configured in the Tokenizer, the values are read into the `params` passed,
+ * and it returns true. The `params.pad_token` ownership is transferred to the caller, who must free it
+ * after use (see `free_string()`).
+ *
+ * If there are no truncation values configured, it returns false.
+ */
+bool get_padding(void *tokenizer_ptr,
+                 struct PaddingParams *params);
 
 /**
  * Encodes string using given tokenizer and EncodeParams.
