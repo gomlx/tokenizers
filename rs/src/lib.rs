@@ -1,10 +1,7 @@
 mod configure;
 mod encode;
 
-use std::ffi::CStr;
-use std::path::PathBuf;
 use std::ptr::null_mut;
-
 use tokenizers::tokenizer::Tokenizer;
 
 /// PointerOrError returns either a `void *` pointer or an error. 
@@ -42,23 +39,6 @@ pub unsafe extern "C" fn from_bytes(bytes: *const u8, len: u32) -> PointerOrErro
             value: null_mut(),
             error: std::ffi::CString::new(err.to_string()).unwrap().into_raw(),
         }
-    }
-}
-
-/// # Safety
-///
-/// This function is return Tokenizer object to Golang from tokenizer.json
-#[no_mangle]
-pub unsafe extern "C" fn from_file(config: *const libc::c_char) -> *mut libc::c_void {
-    let config_cstr = unsafe { CStr::from_ptr(config) };
-    let config = config_cstr.to_str().unwrap();
-    let config = PathBuf::from(config);
-    match Tokenizer::from_file(config) {
-        Ok(tokenizer) => {
-            let ptr = Box::into_raw(Box::new(tokenizer));
-            ptr.cast()
-        }
-        Err(_) => null_mut(),
     }
 }
 

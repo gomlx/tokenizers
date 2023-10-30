@@ -113,13 +113,6 @@ struct PointerOrError from_bytes(const uint8_t *bytes,
                                  uint32_t len);
 
 /**
- * # Safety
- *
- * This function is return Tokenizer object to Golang from tokenizer.json
- */
-void *from_file(const char *config);
-
-/**
  * tokenizer.Decode method.
  * The returned string needs to be deallocated with `free_string`.
  */
