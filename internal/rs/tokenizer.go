@@ -46,57 +46,34 @@ type Encoding struct {
 	Offsets           []Offset
 }
 
-type EncodeParams = C.EncodeParams
+// EncodeParams are passed at `Encode` or `EncodeBatch` calls.
+//
+// It's copy of the underlying C.EncodeParams.
+type EncodeParams struct {
+	AddSpecialTokens, ReturnTokens, ReturnTypeIds, ReturnSpecialTokensMask, ReturnAttentionMask, ReturnOffsets, WithOffsetsCharMode bool
+}
 
-type EncodeOption func(eo *EncodeParams)
-
-func WithReturnAll(withCharMode bool) EncodeOption {
-	return func(eo *EncodeParams) {
-		*eo = EncodeParams{
-			return_type_ids:            true,
-			return_tokens:              true,
-			return_special_tokens_mask: true,
-			return_attention_mask:      true,
-			return_offsets:             true,
-			with_offsets_char_mode:     C.bool(withCharMode),
-		}
+func encodeParamsToC(p EncodeParams) C.EncodeParams {
+	return C.EncodeParams{
+		add_special_tokens:         C.bool(p.AddSpecialTokens),
+		return_tokens:              C.bool(p.ReturnTokens),
+		return_type_ids:            C.bool(p.ReturnTypeIds),
+		return_special_tokens_mask: C.bool(p.ReturnSpecialTokensMask),
+		return_attention_mask:      C.bool(p.ReturnAttentionMask),
+		return_offsets:             C.bool(p.ReturnOffsets),
+		with_offsets_char_mode:     C.bool(p.WithOffsetsCharMode),
 	}
 }
 
-func WithTokens() EncodeOption {
-	return func(eo *EncodeParams) {
-		eo.return_tokens = true
-	}
-}
-
-func WithReturnTypeIds() EncodeOption {
-	return func(eo *EncodeParams) {
-		eo.return_type_ids = true
-	}
-}
-
-func WithReturnSpecialTokensMask() EncodeOption {
-	return func(eo *EncodeParams) {
-		eo.return_special_tokens_mask = true
-	}
-}
-
-func WithReturnAttentionMask() EncodeOption {
-	return func(eo *EncodeParams) {
-		eo.return_attention_mask = true
-	}
-}
-
-func WithReturnOffsets() EncodeOption {
-	return func(eo *EncodeParams) {
-		eo.return_offsets = true
-	}
-}
-
-func WithReturnCharModeOffsets() EncodeOption {
-	return func(eo *EncodeParams) {
-		eo.return_offsets = C.bool(true)
-		eo.with_offsets_char_mode = C.bool(true)
+func ReturnAll(addSpecialTokens, withCharMode bool) EncodeParams {
+	return EncodeParams{
+		AddSpecialTokens:        addSpecialTokens,
+		ReturnTokens:            true,
+		ReturnTypeIds:           true,
+		ReturnSpecialTokensMask: true,
+		ReturnAttentionMask:     true,
+		ReturnOffsets:           true,
+		WithOffsetsCharMode:     withCharMode,
 	}
 }
 
@@ -279,20 +256,15 @@ func (t *Tokenizer) GetPadding() (isSet bool, strategy uint32, direction uint8, 
 	return
 }
 
-func (t *Tokenizer) Encode(str string, addSpecialTokens bool, opts ...EncodeOption) (*Encoding, error) {
+func (t *Tokenizer) Encode(str string, encParams EncodeParams) (*Encoding, error) {
 	if t.tokenizer == nil {
 		return nil, errors.New("tokenizer has already finalized and is now invalid")
 	}
 	cStr := C.CString(str)
 	defer C.free(unsafe.Pointer(cStr))
 
-	encParams := EncodeParams{add_special_tokens: C.bool(addSpecialTokens)}
-	for _, opt := range opts {
-		opt(&encParams)
-	}
-
 	// We expected an EncodedResults with only one result.
-	res := C.encode(t.tokenizer, cStr, encParams)
+	res := C.encode(t.tokenizer, cStr, encodeParamsToC(encParams))
 	defer C.free_encode_results(res)
 	if res.len != 1 || res.error != nil {
 		if res.error != nil {
@@ -307,19 +279,13 @@ func (t *Tokenizer) Encode(str string, addSpecialTokens bool, opts ...EncodeOpti
 	return encodeResult, nil
 }
 
-func (t *Tokenizer) EncodeBatch(strArr []string, addSpecialTokens bool, opts ...EncodeOption) ([]Encoding, error) {
+func (t *Tokenizer) EncodeBatch(strArr []string, encParams EncodeParams) ([]Encoding, error) {
 	if t.tokenizer == nil {
 		return nil, errors.New("tokenizer has already finalized and is now invalid")
 	}
 	batchLen := len(strArr)
 	if batchLen == 0 {
 		return nil, errors.New("empty batch given to EncodeBatch")
-	}
-
-	// parse encode options
-	encParams := EncodeParams{add_special_tokens: C.bool(addSpecialTokens)}
-	for _, opt := range opts {
-		opt(&encParams)
 	}
 
 	// Make string vector to Rust
@@ -339,7 +305,7 @@ func (t *Tokenizer) EncodeBatch(strArr []string, addSpecialTokens bool, opts ...
 		t.tokenizer,
 		C.uint32_t(batchLen),
 		(**C.char)(unsafe.Pointer(&cStrings[0])),
-		encParams,
+		encodeParamsToC(encParams),
 	)
 	defer C.free_encode_results(results)
 	if int(results.len) != batchLen || results.error != nil {
@@ -363,11 +329,11 @@ func (t *Tokenizer) EncodeBatch(strArr []string, addSpecialTokens bool, opts ...
 
 // parseResult takes a `*C.Buffer` and copies content to the given `*Encoding`.
 // It also requires the `C.EncodeParams` used to encode.
-func (t *Tokenizer) parseResult(params C.EncodeParams, buffer C.Buffer, output *Encoding) {
+func (t *Tokenizer) parseResult(params EncodeParams, buffer C.Buffer, output *Encoding) {
 	entryLen := int(buffer.len)
 
 	// Tokens
-	if buffer.tokens != nil && params.return_tokens {
+	if buffer.tokens != nil && params.ReturnTokens {
 		output.Tokens = make([]string, entryLen)
 		cStrTokens := unsafe.Slice((**C.char)(unsafe.Pointer(buffer.tokens)), entryLen)
 		for j, cStr := range cStrTokens {
@@ -379,7 +345,7 @@ func (t *Tokenizer) parseResult(params C.EncodeParams, buffer C.Buffer, output *
 	output.TokenIds = uint32VecToSlice(buffer.ids, entryLen)
 
 	// Token offsets
-	if params.return_offsets && buffer.offsets != nil {
+	if params.ReturnOffsets && buffer.offsets != nil {
 		output.Offsets = make([]Offset, entryLen)
 		cOffsets := (*[1 << 30]C.struct_Offset)(unsafe.Pointer(buffer.offsets))
 		for j := 0; j < entryLen; j++ {
@@ -391,17 +357,17 @@ func (t *Tokenizer) parseResult(params C.EncodeParams, buffer C.Buffer, output *
 	}
 
 	// TypeIds
-	if params.return_type_ids && buffer.type_ids != nil {
+	if params.ReturnTypeIds && buffer.type_ids != nil {
 		output.TypeIds = uint32VecToSlice(buffer.type_ids, entryLen)
 	}
 
 	// SpecialTokensMask
-	if params.return_special_tokens_mask && buffer.special_tokens_mask != nil {
+	if params.ReturnSpecialTokensMask && buffer.special_tokens_mask != nil {
 		output.SpecialTokensMask = uint32VecToSlice(buffer.special_tokens_mask, entryLen)
 	}
 
 	// AttentionMask
-	if params.return_attention_mask && buffer.attention_mask != nil {
+	if params.ReturnAttentionMask && buffer.attention_mask != nil {
 		output.AttentionMask = uint32VecToSlice(buffer.attention_mask, entryLen)
 	}
 }
