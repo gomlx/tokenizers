@@ -2,6 +2,20 @@ use std::ffi::CStr;
 use tokenizers::tokenizer::Tokenizer;
 use crate::encode::convert_to_tokenizer_ref;
 
+
+/// Returns the vocab size.
+#[no_mangle]
+pub unsafe extern "C" fn vocab_size(ptr: *mut libc::c_void) -> u32 {
+    let tokenizer: &Tokenizer;
+    unsafe {
+        tokenizer = ptr
+            .cast::<Tokenizer>()
+            .as_ref()
+            .expect("failed to cast tokenizer");
+    }
+    tokenizer.get_vocab_size(true) as u32
+}
+
 /// TruncationParameters represents the truncation parameters
 /// that can be set with "with_truncation".
 #[repr(C)]

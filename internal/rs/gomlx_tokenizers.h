@@ -113,17 +113,6 @@ struct PointerOrError from_bytes(const uint8_t *bytes,
                                  uint32_t len);
 
 /**
- * tokenizer.Decode method.
- * The returned string needs to be deallocated with `free_string`.
- */
-char *decode(void *tokenizer_ptr, const uint32_t *ids, uint32_t len, bool skip_special_tokens);
-
-/**
- * Returns the vocab size.
- */
-uint32_t vocab_size(void *ptr);
-
-/**
  * Frees a Tokenizer allocated by Rust and returned to Golang.
  */
 void free_tokenizer(void *ptr);
@@ -132,6 +121,11 @@ void free_tokenizer(void *ptr);
  * Frees a `*C.char` allocated by Rust and return to Golang.
  */
 void free_string(char *ptr);
+
+/**
+ * Returns the vocab size.
+ */
+uint32_t vocab_size(void *ptr);
 
 /**
  * set_truncation modifies the tokenizer with the given truncation parameters.
@@ -188,5 +182,11 @@ struct EncodeResults encode_batch(void *tokenizer_ptr,
  * This function is release Vec<Buffer> from Rust returned to Golang by `encode_batch`.
  */
 void free_encode_results(struct EncodeResults results);
+
+/**
+ * tokenizer.Decode method.
+ * The returned string needs to be deallocated with `free_string`.
+ */
+char *decode(void *tokenizer_ptr, const uint32_t *ids, uint32_t len, bool skip_special_tokens);
 
 /* File generated with cbindgen from the Rust library -- don't change it directly */
