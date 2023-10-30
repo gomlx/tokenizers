@@ -22,9 +22,9 @@ import "C"
 
 import (
 	"github.com/pkg/errors"
-	"io"
 	"os"
 	"runtime"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -33,7 +33,11 @@ type Offset struct {
 	End   uint32
 }
 
-type TokenizerResult struct {
+// Encoding is the result of a Tokenizer.Encode.
+//
+// Only TokenIds is always present, all other fields
+// are only set if requested.
+type Encoding struct {
 	TokenIds          []uint32
 	TypeIds           []uint32
 	SpecialTokensMask []uint32
@@ -43,6 +47,7 @@ type TokenizerResult struct {
 }
 
 type EncodeParams = C.EncodeParams
+
 type EncodeOption func(eo *EncodeParams)
 
 func WithReturnAll(withCharMode bool) EncodeOption {
@@ -97,11 +102,9 @@ func WithReturnCharModeOffsets() EncodeOption {
 
 // uint vector to golang slice
 func uint32VecToSlice(arrPtr *C.uint32_t, arrLen int) []uint32 {
+	uint32Vec := unsafe.Slice((*uint32)(unsafe.Pointer(arrPtr)), arrLen)
 	slice := make([]uint32, arrLen)
-	for i, v := range unsafe.Slice(arrPtr, arrLen) {
-		slice[i] = uint32(v)
-	}
-
+	copy(slice, uint32Vec)
 	return slice
 }
 
@@ -116,7 +119,24 @@ const (
 	TruncationDirectionRight
 )
 
-var _ io.Closer = (*Tokenizer)(nil)
+// CountTokenizerAllocs counts the number of Tokenizer allocations.
+// This is used to test for memory leaks.
+var CountTokenizerAllocs = atomic.Int64{}
+
+// Finalize frees the associated Rust tokenizer.
+// It is automatically called at garbage collection, but you can call ahead of time.
+// If called the tokenizer will become invalid.
+func (t *Tokenizer) Finalize() {
+	if t == nil {
+		return
+	}
+	defer runtime.KeepAlive(t)
+	if t.tokenizer != nil {
+		C.free_tokenizer(t.tokenizer)
+		t.tokenizer = nil
+		CountTokenizerAllocs.Add(-1)
+	}
+}
 
 func FromBytes(data []byte) (*Tokenizer, error) {
 	pointerOrError := C.from_bytes((*C.uchar)(unsafe.Pointer(&data[0])), C.uint(len(data)))
@@ -124,7 +144,11 @@ func FromBytes(data []byte) (*Tokenizer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Tokenizer{tokenizer: pointerOrError.value}, nil
+	t := &Tokenizer{tokenizer: pointerOrError.value}
+	CountTokenizerAllocs.Add(1)
+	runtime.SetFinalizer(t, func(t *Tokenizer) { t.Finalize() })
+
+	return t, nil
 }
 
 func FromFile(path string) (*Tokenizer, error) {
@@ -167,6 +191,9 @@ func (t *Tokenizer) SetTruncation(
 
 // SetNoTruncation changes the tokenizer to not use truncation.
 func (t *Tokenizer) SetNoTruncation() error {
+	if t.tokenizer == nil {
+		return errors.New("tokenizer has already finalized and is now invalid")
+	}
 	defer runtime.KeepAlive(t)
 	return errorFromCStr(
 		C.set_truncation(t.tokenizer, nil))
@@ -176,6 +203,9 @@ func (t *Tokenizer) SetNoTruncation() error {
 // If there are no parameters set, `isSet` is false, and the other values should be ignored.
 // Otherwise, `isSet` is true, and the other values are returned appropriately.
 func (t *Tokenizer) GetTruncation() (isSet bool, direction uint8, maxLength uint32, strategy uint8, stride uint32) {
+	if t.tokenizer == nil {
+		return
+	}
 	params := &C.TruncationParams{}
 	isSet = bool(C.get_truncation(t.tokenizer, params))
 	runtime.KeepAlive(t)
@@ -193,6 +223,9 @@ func (t *Tokenizer) GetTruncation() (isSet bool, direction uint8, maxLength uint
 // - direction: 0 -> Left (*); 1 -> Right.
 func (t *Tokenizer) SetPadding(
 	strategy uint32, direction uint8, padToMultipleOf, padId, padTypeId uint32, padToken string) {
+	if t.tokenizer == nil {
+		return
+	}
 	var padTokenCStr *C.char
 	if padToken != "" {
 		padTokenCStr = C.CString(padToken)
@@ -214,6 +247,9 @@ func (t *Tokenizer) SetPadding(
 
 // SetNoPadding changes the tokenizer not to use padding.
 func (t *Tokenizer) SetNoPadding() {
+	if t.tokenizer == nil {
+		return
+	}
 	defer runtime.KeepAlive(t)
 	C.set_padding(t.tokenizer, nil)
 }
@@ -222,6 +258,9 @@ func (t *Tokenizer) SetNoPadding() {
 // If there are no parameters set, `isSet` is false, and the other values should be ignored.
 // Otherwise, `isSet` is true, and the other values are returned appropriately.
 func (t *Tokenizer) GetPadding() (isSet bool, strategy uint32, direction uint8, padToMultipleOf, padId, padTypeId uint32, padToken string) {
+	if t.tokenizer == nil {
+		return
+	}
 	params := &C.PaddingParams{}
 	isSet = bool(C.get_padding(t.tokenizer, params))
 	runtime.KeepAlive(t)
@@ -240,14 +279,10 @@ func (t *Tokenizer) GetPadding() (isSet bool, strategy uint32, direction uint8, 
 	return
 }
 
-func (t *Tokenizer) Close() error {
-	defer runtime.KeepAlive(t)
-	C.free_tokenizer(t.tokenizer)
-	t.tokenizer = nil
-	return nil
-}
-
-func (t *Tokenizer) Encode(str string, addSpecialTokens bool, opts ...EncodeOption) (*TokenizerResult, error) {
+func (t *Tokenizer) Encode(str string, addSpecialTokens bool, opts ...EncodeOption) (*Encoding, error) {
+	if t.tokenizer == nil {
+		return nil, errors.New("tokenizer has already finalized and is now invalid")
+	}
 	cStr := C.CString(str)
 	defer C.free(unsafe.Pointer(cStr))
 
@@ -267,12 +302,15 @@ func (t *Tokenizer) Encode(str string, addSpecialTokens bool, opts ...EncodeOpti
 		}
 	}
 
-	encodeResult := &TokenizerResult{}
+	encodeResult := &Encoding{}
 	t.parseResult(encParams, *res.encoded, encodeResult)
 	return encodeResult, nil
 }
 
-func (t *Tokenizer) EncodeBatch(strArr []string, addSpecialTokens bool, opts ...EncodeOption) ([]TokenizerResult, error) {
+func (t *Tokenizer) EncodeBatch(strArr []string, addSpecialTokens bool, opts ...EncodeOption) ([]Encoding, error) {
+	if t.tokenizer == nil {
+		return nil, errors.New("tokenizer has already finalized and is now invalid")
+	}
 	batchLen := len(strArr)
 	if batchLen == 0 {
 		return nil, errors.New("empty batch given to EncodeBatch")
@@ -314,7 +352,7 @@ func (t *Tokenizer) EncodeBatch(strArr []string, addSpecialTokens bool, opts ...
 	runtime.KeepAlive(encParams)
 
 	// parse tokenizer encode result
-	batchResults := make([]TokenizerResult, batchLen)
+	batchResults := make([]Encoding, batchLen)
 	buffers := unsafe.Slice((*C.Buffer)(unsafe.Pointer(results.encoded)), batchLen)
 	for ii, buffer := range buffers {
 		t.parseResult(encParams, buffer, &batchResults[ii])
@@ -323,9 +361,9 @@ func (t *Tokenizer) EncodeBatch(strArr []string, addSpecialTokens bool, opts ...
 	return batchResults, nil
 }
 
-// parseResult takes a `*C.Buffer` and copies content to the given `*TokenizerResult`.
+// parseResult takes a `*C.Buffer` and copies content to the given `*Encoding`.
 // It also requires the `C.EncodeParams` used to encode.
-func (t *Tokenizer) parseResult(params C.EncodeParams, buffer C.Buffer, output *TokenizerResult) {
+func (t *Tokenizer) parseResult(params C.EncodeParams, buffer C.Buffer, output *Encoding) {
 	entryLen := int(buffer.len)
 
 	// Tokens
@@ -369,6 +407,9 @@ func (t *Tokenizer) parseResult(params C.EncodeParams, buffer C.Buffer, output *
 }
 
 func (t *Tokenizer) Decode(tokenIDs []uint32, skipSpecialTokens bool) string {
+	if t.tokenizer == nil {
+		return ""
+	}
 	if len(tokenIDs) == 0 {
 		return ""
 	}
@@ -380,5 +421,8 @@ func (t *Tokenizer) Decode(tokenIDs []uint32, skipSpecialTokens bool) string {
 }
 
 func (t *Tokenizer) VocabSize() uint32 {
+	if t.tokenizer == nil {
+		return 0
+	}
 	return uint32(C.vocab_size(t.tokenizer))
 }

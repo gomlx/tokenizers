@@ -2,6 +2,7 @@ package rs_test
 
 import (
 	_ "embed"
+	"runtime"
 	"testing"
 
 	"github.com/gomlx/tokenizers/internal/rs"
@@ -29,15 +30,14 @@ func TestInvalidBytes(t *testing.T) {
 	tk, err := rs.FromBytes([]byte(contents))
 	assert.Error(t, err)
 	if err == nil {
-		err = tk.Close()
-		require.NoError(t, err)
+		tk.Finalize()
 	}
 }
 
 func TestEmbeddingConfig(t *testing.T) {
 	tk, err := rs.FromBytes(embeddedBytes)
 	require.NoError(t, err)
-	defer func() { _ = tk.Close() }()
+	defer tk.Finalize()
 
 	tests := []struct {
 		name       string
@@ -79,7 +79,6 @@ func TestEmbeddingConfig(t *testing.T) {
 func TestEncode(t *testing.T) {
 	tk, err := rs.FromFile(bertJson)
 	require.NoError(t, err)
-	defer func() { _ = tk.Close() }()
 	tests := []struct {
 		name       string
 		str        string
@@ -124,12 +123,16 @@ func TestEncode(t *testing.T) {
 			assert.Equal(t, tt.wantTokens, encodeRes.Tokens)
 		})
 	}
+
+	// Checks that the tokenizer is properly finalized.
+	tk.Finalize()
+	assert.Equal(t, int64(0), rs.CountTokenizerAllocs.Load())
 }
 
 func TestEncodeOptions(t *testing.T) {
 	tk, err := rs.FromFile(bertJson)
 	require.NoError(t, err)
-	defer func() { _ = tk.Close() }()
+	defer tk.Finalize()
 	tests := []struct {
 		name                  string
 		str                   string
@@ -199,7 +202,7 @@ func TestEncodeOptions(t *testing.T) {
 func TestEncodeOffsets(t *testing.T) {
 	tk, err := rs.FromFile(bertJson)
 	require.NoError(t, err)
-	defer func() { _ = tk.Close() }()
+	defer tk.Finalize()
 
 	encodeRes, err := tk.Encode("brown fox jumps over the lazy dog", false, rs.WithReturnOffsets())
 	require.NoError(t, err)
@@ -231,7 +234,7 @@ func TestEncodeOffsets(t *testing.T) {
 func TestEncodeBatch(t *testing.T) {
 	tk, err := rs.FromFile(bertJson)
 	require.NoError(t, err)
-	defer func() { _ = tk.Close() }()
+	defer tk.Finalize()
 
 	tests := []struct {
 		name       string
@@ -269,6 +272,8 @@ func TestEncodeBatch(t *testing.T) {
 	}
 }
 
+// TestEncodeWithTruncation tests truncation, but it's also used to verify that GC is properly finalizing
+// the Tokenizers.
 func TestEncodeWithTruncation(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -320,7 +325,6 @@ func TestEncodeWithTruncation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tk, err := rs.FromBytes(embeddedBytes)
 			require.NoError(t, err)
-			defer func() { _ = tk.Close() }()
 
 			isSet, _, _, _, _ := tk.GetTruncation()
 			assert.False(t, isSet)
@@ -350,6 +354,12 @@ func TestEncodeWithTruncation(t *testing.T) {
 
 		})
 	}
+
+	// Check tokenizers are properly finalized.
+	for ii := 0; ii < 3; ii++ {
+		runtime.GC()
+	}
+	assert.Equal(t, int64(0), rs.CountTokenizerAllocs.Load())
 }
 
 func TestEncodeWithPadding(t *testing.T) {
@@ -397,7 +407,7 @@ func TestEncodeWithPadding(t *testing.T) {
 			isSet, _, _, _, _, _, _ := tk.GetPadding()
 			assert.False(t, isSet)
 
-			defer func() { _ = tk.Close() }()
+			defer tk.Finalize()
 			tk.SetPadding(tt.padLen, tt.dir, tt.padToMultipleOf, tt.padId, 0, tt.padToken)
 			isSet, strategy, direction, padToMultipleOf, padId, padTypeId, padToken := tk.GetPadding()
 			assert.Equal(t, tt.padLen, strategy)
@@ -444,7 +454,7 @@ func TestEncodeWithPaddingBert(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tk, err := rs.FromFile(bertPaddingJson) // Padding pre-configured in Json file.
 			require.NoError(t, err)
-			defer func() { _ = tk.Close() }()
+			defer tk.Finalize()
 
 			encodeRes, err := tk.Encode(tt.str, tt.addSpecial, rs.WithReturnAll(false))
 			require.NoError(t, err)
@@ -457,7 +467,7 @@ func TestEncodeWithPaddingBert(t *testing.T) {
 func TestDecode(t *testing.T) {
 	tk, err := rs.FromFile(bertJson)
 	require.NoError(t, err)
-	defer func() { _ = tk.Close() }()
+	defer tk.Finalize()
 	tests := []struct {
 		name        string
 		tokens      []uint32
@@ -506,14 +516,14 @@ func TestDecode(t *testing.T) {
 func TestVocabSize(t *testing.T) {
 	tk, err := rs.FromFile(bertJson)
 	require.NoError(t, err)
-	defer func() { _ = tk.Close() }()
+	defer tk.Finalize()
 	assert.Equal(t, uint32(30522), tk.VocabSize())
 }
 
 func BenchmarkEncodeNTimes(b *testing.B) {
 	tk, err := rs.FromFile(bertJson)
 	require.NoError(b, err)
-	defer func() { _ = tk.Close() }()
+	defer tk.Finalize()
 	expected := []uint32{2829, 4419, 14523, 2058, 1996, 13971, 3899}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -528,7 +538,7 @@ func BenchmarkEncodeNTimes(b *testing.B) {
 func BenchmarkEncodeWithOptionNTimes(b *testing.B) {
 	tk, err := rs.FromFile(bertJson)
 	require.NoError(b, err)
-	defer func() { _ = tk.Close() }()
+	defer tk.Finalize()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, err = tk.Encode("brown fox jumps over the lazy dog", false, rs.WithReturnAll(false))
@@ -541,7 +551,7 @@ func BenchmarkEncodeWithOptionNTimes(b *testing.B) {
 func BenchmarkDecodeNTimes(b *testing.B) {
 	tk, err := rs.FromFile(bertJson)
 	require.NoError(b, err)
-	defer func() { _ = tk.Close() }()
+	defer tk.Finalize()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		str := tk.Decode([]uint32{2829, 4419, 14523, 2058, 1996, 13971, 3899}, true)
