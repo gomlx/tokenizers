@@ -10,7 +10,7 @@
 package rs
 
 // The first lines below link the pre-built library according to the platform configured.
-// If adding support for a another platform, please also add the building rules in `magefile.go`, in
+// If adding support for another platform, please also add the building rules in `magefile.go`, in
 // the project's root directory.
 
 /*
@@ -28,9 +28,10 @@ import (
 	"unsafe"
 )
 
+// Offset with the range (Start and End) of the matching token in the original sentence.
+// Values depend on CharMode configuration (bytes or UTF-8 character).
 type Offset struct {
-	Start uint32
-	End   uint32
+	Start, End uint32
 }
 
 // Encoding is the result of a Tokenizer.Encode.
