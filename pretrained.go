@@ -1,93 +1,141 @@
 package tokenizers
 
 import (
+	"context"
 	"fmt"
 	"github.com/pkg/errors"
-	"io"
 	"net/http"
 	"os"
-	"path"
 )
 
 // This file handles loading a Tokenizer vocabulary and configuration from
 // a pretrained model, including downloading from HuggingFace.
 
-// FromPretrained creates a new Tokenizer by downloading the pretrained tokenizer corresponding
-// to the name -- or reading it from disk if it's already been downloaded.
+// Filenames used for tokenizers
+const (
+	specialTokensMapFileName = "special_tokens_map.json"
+	addedTokensFileName      = "added_tokens.json"
+	tokenizerConfigFileName  = "tokenizer_config.json"
+)
+
+// PretrainedConfig for how to download (or load from disk) a pretrained Tokenizer.
+// It can be configured in different ways (see methods below), and when finished configuring,
+// call Done to actually download (or load from disk) the pretrained tokenizer.
+type PretrainedConfig struct {
+	name, cacheDir, authToken string
+	isTemporaryCache          bool
+
+	client *http.Client
+	ctx    context.Context
+}
+
+// FromPretrainedWith creates a new Tokenizer by downloading the pretrained tokenizer corresponding
+// to the name.
 //
-// If `cacheDir` is empty, it will download to a temporary file and it will be deleted after
-// being used.
-// Otherwise, if the tokenizer referred by `name` will be cached in `cacheDir` after download.
+// There are several options that can be configured.
+// After that one calls Done, and it will return the Tokenizer object (or an error).
 //
 // If anything goes wrong, an error is returned instead.
-func FromPretrained(name string, cacheDir string) (*Tokenizer, error) {
-	// Find file location to download (if needed) the vocabulary json file.
-	var vocabPath string
-	if cacheDir == "" {
+func FromPretrainedWith(name string) *PretrainedConfig {
+	pt := &PretrainedConfig{
+		name:     name,
+		cacheDir: DefaultCacheDir(),
+		ctx:      context.Background(),
+	}
+
+	// cacheDir defaults to the same used by pytorch transformers.
+	return pt
+}
+
+// CacheDir configures cacheDir as directory to store a cache of the downloaded files.
+// If the tokenizer has already been downloaded in the directory, it will be read from disk
+// instead of the network.
+//
+// The default value is `~/.cache/huggingface/hub/`, the same used by the original Transformers library.
+// The cache home is overwritten by `$XDG_CACHE_HOME` if it is set.
+func (pt *PretrainedConfig) CacheDir(cacheDir string) *PretrainedConfig {
+	pt.cacheDir = cacheDir
+	return pt
+}
+
+// NoCache to be used, no copy is kept of the downloaded tokenizer.
+func (pt *PretrainedConfig) NoCache() *PretrainedConfig {
+	pt.cacheDir = ""
+	return pt
+}
+
+// AuthToken sets the authentication token to use.
+// The default is to use no token, which works for simply downloading most tokenizers.
+// TODO: not implemented yet, it will lead to an error when calling Done.
+func (pt *PretrainedConfig) AuthToken(token string) *PretrainedConfig {
+	pt.authToken = token
+	return pt
+}
+
+// HttpClient configures an http.Client to use to connect to HuggingFace Hub.
+// The default is `nil`, in which case one will be created for the requests.
+func (pt *PretrainedConfig) HttpClient(client *http.Client) *PretrainedConfig {
+	pt.client = client
+	return pt
+}
+
+// Context configures the given context to download content from the internet.
+// The default is to use `context.Background()` with no timeout.
+func (pt *PretrainedConfig) Context(ctx context.Context) *PretrainedConfig {
+	pt.ctx = ctx
+	return pt
+}
+
+// Done concludes the configuration of FromPretrainedWith and actually downloads (or loads from disk)
+// the tokenizer.
+func (pt *PretrainedConfig) Done() (*Tokenizer, error) {
+	if pt.client == nil {
+		// Default HTTP client: no timeout, empty cookie jar.
+		pt.client = &http.Client{}
+	}
+
+	// Create a temporary cacheDir is one was not configured.
+	if pt.cacheDir == "" {
+		pt.isTemporaryCache = true
 		// No cache directory, create a temporary file to store vocabulary.
-		f, err := os.CreateTemp("", "tokenizers_vocab.json")
+		f, err := os.CreateTemp("", "gomlx_tokenizers")
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to create temporary directory")
 		}
-		vocabPath = f.Name()
+		pt.cacheDir = f.Name()
 		_ = f.Close()
-	} else {
-		vocabDir := path.Join(cacheDir, name)
-		err := os.MkdirAll(vocabDir, 0770)
-		if err != nil {
-			return nil, errors.Wrapf(err, "failed to create cache directory %q for tokenizer:", vocabDir)
-		}
-		vocabPath = path.Join(vocabDir, "vocab.json")
-	}
-
-	// Download the tokenizer if it does not exist.
-	if _, err := os.Stat(vocabPath); os.IsNotExist(err) {
-		err := downloadPretrainedTokenizer(name, vocabPath)
-		if err != nil {
-			return nil, errors.Wrapf(err, "failed to download vocabulary for tokenizer %q", name)
+		if err := os.Remove(pt.cacheDir); err != nil {
+			return nil, errors.Wrap(err, "failed to remove temporary file where the downloading directory would be created")
 		}
 	}
 
-	// Load the tokenizer from the cache.
-	data, err := os.ReadFile(vocabPath)
+	// Read Tokenizer configuration.
+	configPath, err := Download(pt.ctx, pt.client, pt.name, tokenizerConfigFileName, pt.cacheDir, pt.token)
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to load vocabulary file %q for tokenizer", vocabPath)
+		return nil, errors.WithMessage(err, "failed to download %q")
+
 	}
+	fmt.Printf("> configPath=%s\n", configPath)
 
-	// Create a new Tokenizer from the JSON data.
-	return FromBytes(data)
-}
+	/*
+		// Download the tokenizer if it does not exist.
+		if _, err := os.Stat(vocabPath); os.IsNotExist(err) {
+			err := downloadPretrainedTokenizer(pt.name, vocabPath)
+			if err != nil {
+				return nil, errors.Wrapf(err, "failed to download vocabulary for tokenizer %q", pt.name)
+			}
+		}
 
-// downloadPretrainedTokenizer from the HuggingFace Hub, into given path.
-func downloadPretrainedTokenizer(name string, targetPath string) error {
-	// Create a client to the HuggingFace Hub.
-	client := http.Client{}
+		// Load the tokenizer from the cache.
+		data, err := os.ReadFile(vocabPath)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to load vocabulary file %q for tokenizer", vocabPath)
+		}
 
-	// Create a request to download the tokenizer.
-	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("https://huggingface.co/%s/resolve/main/vocab.json", name), nil)
-	if err != nil {
-		return err
-	}
+		fmt.Printf("Loaded file:\n%s\n", string(data))
+		// Create a new Tokenizer from the JSON data.
+		return FromBytes(data)
 
-	// Make the request and download the tokenizer.
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	// Create the output file.
-	outputFile, err := os.Create(targetPath)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = outputFile.Close() }()
-
-	// Copy the tokenizer data from the response to the output file.
-	_, err = io.Copy(outputFile, resp.Body)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	*/
+	return nil, errors.New("not implemented")
 }
