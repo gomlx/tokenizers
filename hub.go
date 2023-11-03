@@ -1,6 +1,11 @@
 package tokenizers
 
 // HuggingFace Hub related functionality.
+//
+// TODOs:
+// * Support for authentication tokens.
+// * Resume downloads from interrupted connections.
+// * Check disk-space before starting to download.
 
 import (
 	"bytes"
@@ -9,13 +14,17 @@ import (
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	"io"
+	"math/rand"
 	"net/http"
 	"os"
 	"path"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"text/template"
+	"time"
 )
 
 var SessionId string
@@ -27,6 +36,14 @@ func init() {
 	}
 	SessionId = strings.Replace(sessionUUID.String(), "-", "", -1)
 }
+
+var (
+	// DefaultDirCreationPerm is used when creating new cache subdirectories.
+	DefaultDirCreationPerm = os.FileMode(0755)
+
+	// DefaultFileCreationPerm is used when creating files inside the cache subdirectories.
+	DefaultFileCreationPerm = os.FileMode(0644)
+)
 
 const (
 	// Versions, as of the time of this writing.
@@ -118,24 +135,55 @@ func GetHeaders(userAgent, token string) map[string]string {
 	}
 }
 
+// ProgressFn is a function called while downloading a file.
+// It will be called with `progress=0` and `downloaded=0` at the first call, when download starts.
+type ProgressFn func(progress, downloaded, total int, eof bool)
+
+// progressReader implements a reader that calls progressFn after each read.
+type progressReader struct {
+	reader            io.Reader
+	downloaded, total int
+	progressFn        ProgressFn
+}
+
+// Read implements io.Reader, and report number of bytes read to progressFn.
+func (r *progressReader) Read(dst []byte) (n int, err error) {
+	n, err = r.reader.Read(dst)
+	r.downloaded += n
+	if err != nil && err != io.EOF {
+		// No progress.
+		return
+	}
+	r.progressFn(n, r.downloaded, r.total, err == io.EOF)
+	return
+}
+
 // Download returns file either from cache or by downloading from HuggingFace Hub.
 //
 // Args:
 //
-// * `ctx` for the requests. There may be more than one request, the first being an `HEAD` HTTP.
-// * `client` used to make HTTP requests. I can be created with `&httpClient{}`.
-// * `repoId` and `fileName`: define the file and repository (model) name to download.
-// * `cacheDir`: directory where to store the downloaded files, or reuse if previously downloaded.
-// * `token`: used for authentication. TODO: not implemented yet.
+//   - `ctx` for the requests. There may be more than one request, the first being an `HEAD` HTTP.
+//   - `client` used to make HTTP requests. I can be created with `&httpClient{}`.
+//   - `repoId` and `fileName`: define the file and repository (model) name to download.
+//   - `repoType`: usually "model".
+//   - `revision`: default is "main", but a commitHash can be given.
+//   - `cacheDir`: directory where to store the downloaded files, or reuse if previously downloaded.
+//     Consider using the output from `DefaultCacheDir()` if in doubt.
+//   - `token`: used for authentication. TODO: not implemented yet.
+//   - `forceDownload`: if set to true, it will download the contents of the file even if there is a local copy.
+//   - `localOnly`: does not use network, not even for reading the metadata.
+//   - `progressFn`: is called during the download of a file. It is called synchronously and expected to be fast/
+//     instantaneous. If the UI can be blocking, arrange it to be handled on a separate GoRoutine.
 //
-// On success it returns the `filePath` to the downloaded file. Otherwise it returns an error.
-func Download(ctx context.Context, client *http.Client, repoId, fileName, cacheDir, token string) (filePath string, err error) {
+// On success it returns the `filePath` to the downloaded file, and its `commitHash`. Otherwise it returns an error.
+func Download(ctx context.Context, client *http.Client,
+	repoId, repoType, revision, fileName, cacheDir, token string,
+	forceDownload, forceLocal bool, progressFn ProgressFn) (filePath, commitHash string, err error) {
 	if cacheDir == "" {
 		err = errors.New("Download() requires a cacheDir, even if temporary, to store the results of the download")
 		return
 	}
-	repoType := "model"         // TODO, for now only "model", the default.
-	revision := DefaultRevision // commit hashes not accepted yet.
+	cacheDir = path.Clean(cacheDir)
 	userAgent := HttpUserAgent()
 	if token != "" {
 		// TODO, for now no token support.
@@ -145,31 +193,43 @@ func Download(ctx context.Context, client *http.Client, repoId, fileName, cacheD
 	}
 	folderName := RepoFolderName(repoId, repoType)
 
-	// Find and if necessary create local file on disk.
+	// Find storage directory and if necessary create directories on disk.
 	storageDir := path.Join(cacheDir, folderName)
-	err = os.MkdirAll(storageDir, 0770)
+	err = os.MkdirAll(storageDir, DefaultDirCreationPerm)
 	if err != nil {
 		err = errors.Wrapf(err, "failed to create cache directory %q:", storageDir)
 		return
 	}
-	fmt.Println("storageDir:", storageDir)
 
-	filePath = path.Join(strings.Split(fileName, "/")...) // Join path parts using current OS separator.
-	fmt.Println("filePath:", filePath)
+	// Join the path parts of fileName using the current OS separator.
+	relativeFilePath := path.Clean(path.Join(strings.Split(fileName, "/")...))
 
+	// Local-only:
+	if forceLocal {
+		commitHash, err = readCommitHashForRevision(storageDir, revision)
+		if err != nil {
+			err = errors.WithMessagef(err, "while trying to load %q from repo %q from disk", fileName, repoId)
+			return
+		}
+		filePath = getSnapshotPath(storageDir, commitHash, relativeFilePath)
+		if !FileExists(filePath) {
+			err = errors.Errorf("Download() with forceLocal, but file %q from repo %q not found in cache -- should be in %q", fileName, repoId, filePath)
+			return
+		}
+		return
+	}
+
+	// URL and headers for request.
 	url := GetUrl(repoId, fileName, repoType, revision)
-	fmt.Println("URL:", url)
-
 	headers := GetHeaders(userAgent, token)
-	fmt.Printf("%q\n", headers)
 
+	// Get file Metadata.
 	var metadata *HFFileMetadata
 	metadata, err = getFileMetadata(ctx, client, url, token, headers)
-	fmt.Printf("Metadata:\n\t%#v\n", metadata)
 	if err != nil {
 		return
 	}
-	commitHash := metadata.CommitHash
+	commitHash = metadata.CommitHash
 	if commitHash == "" {
 		err = errors.Errorf("resource %q for %q doesn't seem to be on huggingface.co (missing commit header)",
 			fileName, repoId)
@@ -186,15 +246,127 @@ func Download(ctx context.Context, client *http.Client, repoId, fileName, cacheD
 	if metadata.Location != url {
 		// In the case of a redirect, remove authorization header when downloading blob
 		delete(headers, "authorization")
+		urlToDownload = metadata.Location
 	}
 
+	// Make blob and snapshot paths (and create its directories).
 	blobPath := path.Join(storageDir, "blobs", etag)
-	pointerPath := path.Join(storageDir, revision, commitHash)
+	snapshotPath := getSnapshotPath(storageDir, commitHash, relativeFilePath)
+	for _, p := range []string{blobPath, snapshotPath} {
+		dir := path.Dir(p)
+		err = os.MkdirAll(dir, DefaultDirCreationPerm)
+		if err != nil {
+			err = errors.Wrapf(err, "cannot create cache directory %q for downloading %q from %q",
+				dir, fileName, repoId)
+			return
+		}
+	}
 
-	_ = blobPath
-	_ = pointerPath
-	_ = urlToDownload
-	_ = cacheDir
+	// Maps the reference of revision to commitHash received. It's a no-op if they are the same.
+	err = cacheCommitHashForSpecificRevision(storageDir, commitHash, revision)
+	if err != nil {
+		err = errors.WithMessagef(err, "while downloading %q from %q", fileName, repoId)
+		return
+	}
+
+	// Use snapshot cached file, if available.
+	if FileExists(snapshotPath) && !forceDownload {
+		filePath = snapshotPath
+		return
+	}
+
+	// If the generic blob is available (downloaded under a different name), link it and use it.
+	if FileExists(blobPath) && !forceDownload {
+		// ... create link
+		err = createSymLink(snapshotPath, blobPath)
+		if err != nil {
+			err = errors.WithMessagef(err, "while downloading %q from %q", fileName, repoId)
+			return
+		}
+		filePath = snapshotPath
+		return
+	}
+
+	// TODO: pre-check disk space availability.
+
+	// Lock file to avoid parallel downloads.
+	lockPath := blobPath + ".lock"
+	errLock := execOnFileLock(ctx, lockPath, func() {
+		if FileExists(blobPath) && !forceDownload {
+			// Some other process (or goroutine) already downloaded the file.
+			return
+		}
+
+		// Create tmpFile where to download.
+		var (
+			tmpFile       *os.File
+			tmpFileClosed bool
+		)
+
+		tmpFile, err = os.CreateTemp(cacheDir, "tmp_blob")
+		if err != nil {
+			err = errors.Wrapf(err, "creating temporary file for download in %q", cacheDir)
+			return
+		}
+		var tmpFilePath = tmpFile.Name()
+		defer func() {
+			// If we exit with an error, make sure to close and remove unfinished temporary file.
+			if !tmpFileClosed {
+				_ = tmpFile.Close()
+				_ = os.Remove(tmpFilePath)
+			}
+		}()
+
+		// Connect and download with an HTTP GET.
+		var resp *http.Response
+		resp, err = client.Get(urlToDownload)
+		if err != nil {
+			err = errors.Wrapf(err, "failed request to download file to %q", urlToDownload)
+			return
+		}
+		defer resp.Body.Close()
+
+		// Replace reader with one that reports the progress, if requested.
+		var r io.Reader = resp.Body
+		if progressFn != nil {
+			r = &progressReader{
+				reader:     r,
+				downloaded: 0,
+				total:      metadata.Size,
+				progressFn: progressFn,
+			}
+			progressFn(0, 0, metadata.Size, false) // Do initial call with 0 downloaded.
+		}
+
+		// Download.
+		_, err := io.Copy(tmpFile, r)
+		if err != nil {
+			err = errors.Wrapf(err, "failed to download file from %q", urlToDownload)
+			return
+		}
+
+		// Download succeeded, move to our target location.
+		tmpFileClosed = true
+		if err = tmpFile.Close(); err != nil {
+			err = errors.Wrapf(err, "failed to close temporary download file %q", tmpFilePath)
+			return
+		}
+		if err = os.Rename(tmpFilePath, blobPath); err != nil {
+			err = errors.Wrapf(err, "failed to move downloaded file %q to %q", tmpFilePath, blobPath)
+			return
+		}
+		if err = createSymLink(snapshotPath, blobPath); err != nil {
+			return
+		}
+	})
+	if err == nil && errLock != nil {
+		err = errLock
+	}
+	if err != nil {
+		err = errors.WithMessagef(err, "while downloading %q from %q", fileName, repoId)
+		return
+	}
+	filePath = snapshotPath
 	return
 }
 
@@ -273,4 +445,137 @@ func getFileMetadata(ctx context.Context, client *http.Client, url, token string
 	return
 }
 
-func 
+// getSnapshotPath returns the "snapshot" path/link to the given commitHash and relativeFilePath.
+func getSnapshotPath(storageDir, commitHash, relativeFilePath string) string {
+	snapshotPath := path.Join(storageDir, "snapshots")
+	return path.Join(snapshotPath, commitHash, relativeFilePath)
+}
+
+// cacheCommitHashForSpecificRevision creates reference between a revision (tag, branch or truncated commit hash)
+// and the corresponding commit hash.
+//
+// It does nothing if `revision` is already a proper `commit_hash` or reference is already cached.
+func cacheCommitHashForSpecificRevision(storageDir, commitHash, revision string) error {
+	if revision == commitHash {
+		// Nothing to do.
+		return nil
+	}
+
+	refPath := path.Join(storageDir, "refs", revision)
+	err := os.MkdirAll(path.Dir(refPath), DefaultDirCreationPerm)
+	if err != nil {
+		return errors.Wrap(err, "failed to create reference subdirectory in cache")
+	}
+	if FileExists(refPath) {
+		contents, err := os.ReadFile(refPath)
+		if err != nil {
+			return errors.Wrapf(err, "failed reading %q", refPath)
+		}
+		checkCommitHash := strings.Trim(string(contents), "\n")
+		if checkCommitHash == commitHash {
+			// Same as previously stored, all good.
+			return nil
+		}
+	}
+
+	// Save new reference.
+	err = os.WriteFile(refPath, []byte(commitHash), DefaultFileCreationPerm)
+	if err != nil {
+		return errors.Wrapf(err, "failed creating file %q", refPath)
+	}
+	return nil
+}
+
+// readCommitHashForRevision from disk.
+// Notice revision can be a commitHash: if we don't find a revision file, we assume that is the case.
+func readCommitHashForRevision(storageDir, revision string) (commitHash string, err error) {
+	refPath := path.Join(storageDir, "refs", revision)
+	if !FileExists(refPath) {
+		commitHash = revision
+		return
+	}
+
+	var contents []byte
+	contents, err = os.ReadFile(refPath)
+	if err != nil {
+		err = errors.Wrapf(err, "failed reading %q", refPath)
+		return
+	}
+	commitHash = strings.Trim(string(contents), "\n")
+	return
+}
+
+// FileExists returns true if file or directory exists.
+func FileExists(path string) bool {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	panic(err)
+}
+
+// createSymlink creates a symbolic link named dst pointing to src, using a relative path if possible.
+//
+// We use relative paths because:
+// * It's what `huggingface_hub` library does, and we want to keep things compatible.
+// * If the cache folder is moved or backed up, links won't break.
+// * Relative paths seem better handled on Windows -- although Windows is not yet fully supported for this package.
+//
+// Example layout:
+//
+//	└── [ 128]  snapshots
+//	  ├── [ 128]  2439f60ef33a0d46d85da5001d52aeda5b00ce9f
+//	  │   ├── [  52]  README.md -> ../../../blobs/d7edf6bd2a681fb0175f7735299831ee1b22b812
+//	  │   └── [  76]  pytorch_model.bin -> ../../../blobs/403450e234d65943a7dcf7e05a771ce3c92faa84dd07db4ac20f592037a1e4bd
+func createSymLink(dst, src string) error {
+	relLink, err := filepath.Rel(path.Dir(dst), src)
+	if err != nil {
+		relLink = src // Take the absolute path instead.
+	}
+	if err = os.Symlink(relLink, dst); err != nil {
+		err = errors.Wrapf(err, "while symlink'ing %q to %q using %q", src, dst, relLink)
+	}
+	return err
+}
+
+// onFileLock locks the given file, executes the function, unlocks again and returns.
+func execOnFileLock(ctx context.Context, lockPath string, fn func()) error {
+	f, err := os.OpenFile(lockPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, DefaultFileCreationPerm)
+	if err != nil {
+		return errors.Wrapf(err, "while locking %q", lockPath)
+	}
+	defer f.Close()
+
+	// Acquire lock or return an error if context is canceled (due to time out).
+	for {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, syscall.EAGAIN) {
+			return errors.Wrapf(err, "while locking %q", lockPath)
+		}
+
+		// Wait from 1 to 2 seconds.
+		timeDuration := time.Millisecond * time.Duration(1000+rand.Intn(1000))
+		select {
+		case <-ctx.Done():
+			return errors.Errorf("context cancelled (timedout?) while waiting for lock to download %q", lockPath)
+		case <-time.NewTimer(timeDuration).C:
+			// Nothing, just continues to the next attempt.
+		}
+	}
+
+	// We got the lock, run the function.
+	fn()
+
+	// Unlock and return.
+	err = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	if err != nil {
+		return errors.Wrapf(err, "while unlocking %q", lockPath)
+	}
+	return nil
+}

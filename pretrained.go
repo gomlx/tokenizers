@@ -1,9 +1,12 @@
 package tokenizers
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/pkg/errors"
+	progressbar "github.com/schollz/progressbar/v3"
 	"net/http"
 	"os"
 )
@@ -22,8 +25,9 @@ const (
 // It can be configured in different ways (see methods below), and when finished configuring,
 // call Done to actually download (or load from disk) the pretrained tokenizer.
 type PretrainedConfig struct {
-	name, cacheDir, authToken string
-	isTemporaryCache          bool
+	name, cacheDir, authToken                   string
+	isTemporaryCache, forceDownload, forceLocal bool
+	showProgressbar                             bool
 
 	client *http.Client
 	ctx    context.Context
@@ -72,6 +76,26 @@ func (pt *PretrainedConfig) AuthToken(token string) *PretrainedConfig {
 	return pt
 }
 
+// ForceDownload will ignore previous files in cache and force (re-)download of contents.
+func (pt *PretrainedConfig) ForceDownload() *PretrainedConfig {
+	pt.forceDownload = true
+	return pt
+}
+
+// ForceLocal won't use the internet, and will only read from the local disk.
+// Notice this prevents even reaching out for the metadata.
+func (pt *PretrainedConfig) ForceLocal() *PretrainedConfig {
+	pt.forceLocal = true
+	return pt
+}
+
+// ProgressBar will display a progress bar when downloading files from the network.
+// Only displayed if not reading from cache.
+func (pt *PretrainedConfig) ProgressBar() *PretrainedConfig {
+	pt.showProgressbar = true
+	return pt
+}
+
 // HttpClient configures an http.Client to use to connect to HuggingFace Hub.
 // The default is `nil`, in which case one will be created for the requests.
 func (pt *PretrainedConfig) HttpClient(client *http.Client) *PretrainedConfig {
@@ -86,9 +110,53 @@ func (pt *PretrainedConfig) Context(ctx context.Context) *PretrainedConfig {
 	return pt
 }
 
+// makeProgressBar and returns that ProgressFn that updates it.
+// It will only display at the first call to the ProgressFn function, and it will automatically close and clean up
+// when ProgressFn is called with `eof==true`.
+// In case of error, to interrupt it, just call it with `ProgressFn(0, 0, /*eof=*/ true)`
+func makeProgressBar(name string) ProgressFn {
+	var data = &struct {
+		name          string
+		bar           *progressbar.ProgressBar
+		started, done bool
+	}{
+		name:    name,
+		started: false,
+		done:    false,
+	}
+
+	return func(progress, downloaded, total int, eof bool) {
+		if data.done {
+			return
+		}
+		if eof && !data.started {
+			// Do nothing, since we never actually created the progressbar.
+			data.done = true
+			return
+		}
+		if !data.started {
+			data.bar = progressbar.DefaultBytes(int64(total), data.name)
+			data.started = true
+		}
+		if progress != 0 {
+			_ = data.bar.Add64(int64(progress))
+		}
+		if eof {
+			_ = data.bar.Close()
+			data.done = true
+		}
+	}
+}
+
 // Done concludes the configuration of FromPretrainedWith and actually downloads (or loads from disk)
 // the tokenizer.
 func (pt *PretrainedConfig) Done() (*Tokenizer, error) {
+	// Sanity checking.
+	if pt.forceDownload && pt.forceLocal {
+		return nil, errors.New("cannot use ForceLocal and ForceDownload at the same time, one or the other (or none)")
+	}
+
+	// Initialize unset attributes.
 	if pt.client == nil {
 		// Default HTTP client: no timeout, empty cookie jar.
 		pt.client = &http.Client{}
@@ -110,32 +178,34 @@ func (pt *PretrainedConfig) Done() (*Tokenizer, error) {
 	}
 
 	// Read Tokenizer configuration.
-	configPath, err := Download(pt.ctx, pt.client, pt.name, tokenizerConfigFileName, pt.cacheDir, pt.token)
-	if err != nil {
-		return nil, errors.WithMessage(err, "failed to download %q")
-
+	repoType := "model"
+	revision := "main"
+	var progressFn ProgressFn
+	if pt.showProgressbar {
+		progressFn = makeProgressBar(tokenizerConfigFileName)
 	}
-	fmt.Printf("> configPath=%s\n", configPath)
-
-	/*
-		// Download the tokenizer if it does not exist.
-		if _, err := os.Stat(vocabPath); os.IsNotExist(err) {
-			err := downloadPretrainedTokenizer(pt.name, vocabPath)
-			if err != nil {
-				return nil, errors.Wrapf(err, "failed to download vocabulary for tokenizer %q", pt.name)
-			}
+	configPath, commitHash, err := Download(
+		pt.ctx, pt.client,
+		pt.name, repoType, revision, tokenizerConfigFileName, pt.cacheDir, pt.authToken,
+		pt.forceDownload, pt.forceLocal, progressFn)
+	if err != nil {
+		if progressFn != nil {
+			progressFn(0, 0, 0, true)
 		}
+		return nil, errors.WithMessagef(err, "tokenizers.FromPretrainedWith() failed to download %q", tokenizerConfigFileName)
+	}
+	var contents []byte
+	contents, err = os.ReadFile(configPath)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to read downloaded tokenizer configuration file in %q", configPath)
+	}
+	dec := json.NewDecoder(bytes.NewReader(contents))
+	var config = map[string]any{}
+	if err = dec.Decode(&config); err != nil {
+		return nil, errors.Wrapf(err, "failed to parse JSON from tokenizer configuration file in %q", configPath)
+	}
 
-		// Load the tokenizer from the cache.
-		data, err := os.ReadFile(vocabPath)
-		if err != nil {
-			return nil, errors.Wrapf(err, "failed to load vocabulary file %q for tokenizer", vocabPath)
-		}
-
-		fmt.Printf("Loaded file:\n%s\n", string(data))
-		// Create a new Tokenizer from the JSON data.
-		return FromBytes(data)
-
-	*/
+	fmt.Printf("configuration: %q\n", config)
+	_ = commitHash
 	return nil, errors.New("not implemented")
 }
