@@ -1,4 +1,13 @@
-# Tokenizers for Go
+# Tokenizers for Go 
+
+<img align="right" src="https://github.com/gomlx/gopjrt/assets/7460115/0f2869be-f64e-48b8-b2fa-1f6cbe703204" alt="Under Construction" width="480"/>
+
+**UNDER CONSTRUCTION** 
+
+**Not functional yet, but for Gemma/Gemini and other Google models, see https://github.com/eliben/go-sentencepiece/.
+
+## About
+
 Tokenizers for Language Models - Go API for [HuggingFace Tokenizers](https://github.com/huggingface/tokenizers)
 
 ## Highlights
