@@ -4,7 +4,7 @@
 
 **UNDER CONSTRUCTION** 
 
-**Not functional yet, but for Gemma/Gemini and other Google models, see https://github.com/eliben/go-sentencepiece/.
+**Not functional yet**, but for Gemma/Gemini/T5 and other Google models, see https://github.com/eliben/go-sentencepiece/.
 
 ## About
 
