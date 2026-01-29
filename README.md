@@ -1,4 +1,4 @@
-# Tokenizers for Go 
+# Tokenizers for Go  -- DEPRECATED, moved to being part of [github.com/gomlx/go-huggingface](https://github.com/gomlx/go-huggingface) instead.
 
 <img align="right" src="https://github.com/gomlx/gopjrt/assets/7460115/0f2869be-f64e-48b8-b2fa-1f6cbe703204" alt="Under Construction" width="480"/>
 
